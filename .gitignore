@@ -1,0 +1,20 @@
+# R 
+.Rproj.user/
+Rplots.pdf
+**.Rd
+.Renviron
+
+# Python
+.venv/
+__pycache__/
+
+# Logs
+logs/
+
+# Saved models
+saves/
+**.pt 
+**.ckpt
+
+# Secrets
+.env
