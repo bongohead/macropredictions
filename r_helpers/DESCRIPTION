@@ -1,0 +1,30 @@
+Package: macropredictions
+Type: Package
+Title: Helper functions
+Version: 3.0.0
+Authors@R: 
+    c(person(given = "Charles",
+             family = "Ye",
+             role = c("aut", "cre"),
+             email = "charles@macropredictions.com"))
+Description: Helper functions for macropredictions.com models. 
+License: GPL (>= 3)
+Imports:
+	dplyr,
+	lubridate,
+	purrr,
+	tibble,
+	httr2,
+	DBI,
+	RPostgres,
+	curl,
+	dotenv,
+	stringr,
+	tidyr
+Suggests:
+    testthat (>= 3.0.0)
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.2.3
+Config/testthat/edition: 3
