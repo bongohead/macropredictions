@@ -1,14 +1,13 @@
-"""
-Calling this controller from the command line allows you to run R scripts (located in modules/),
-but includes additional logging to a database and dynamic passing of command line arguments.
+#' Calling this controller from the command line allows you to run R scripts (located in modules/),
+#' but includes additional logging to a database and dynamic passing of command line arguments.
+#'
+#' The command line args include:
+#' - -d: The directory to the project folder
+#' - -j: The name of the job to use for logging.
+#' - -f: The filename to call to run the module.
+#'
+#' For example, in the command line, call `Rscript controller.r -f modules/test/test-r.r -j test_r -d /project/directory/path`.
 
-The command line args include:
-- -d: The directory to the project folder
-- -j: The name of the job to use for logging.
-- -f: The filename to call to run the module.
-
-For example, in the command line, call `Rscript controller.r -f modules/test/test-r.r -j test_r -d /project/directory/path`.
-"""
 
 # Load Libs ---------------------------------------------------------------
 library(optparse)
@@ -39,8 +38,8 @@ if (interactive() == F) {
 	# Default args for interactive mode
 	opt = list(
 		mpdir = '/home/charles/macropredictions',
-		filename = '/home/charles/macropredictions/modules/external-import/external-import-cbo.r',
-		jobname = 'external-import-cbo'
+		filename = '/home/charles/macropredictions/modules/external_import/external_import_cbo.r',
+		jobname = 'external_import_cbo'
 	)
 }
 
