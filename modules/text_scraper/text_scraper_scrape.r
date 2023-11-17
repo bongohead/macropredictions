@@ -120,7 +120,7 @@ local({
 
 	insert_data =
 		bind_rows(scrape_data$reddit) %>%
-		filter(., !is.na(post_id) & !is.na(title) & !is.na(scrape_board) & !is.na(source_board)) %>%
+		filter(., !is.na(post_id) & !is.na(title) & !is.na(scrape_board) & !is.na(source_board))
 
 	insert_result = write_df_to_sql(
 		pg,
