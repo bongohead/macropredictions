@@ -124,7 +124,7 @@ get_fred_obs = function(pull_ids, api_key, .obs_start = '2000-01-01', .verbose =
 				'&file_type=json',
 				'&realtime_start=', today, '&realtime_end=', today,
 				'&observation_start=', .obs_start, '&observation_end=', today,
-				'&frequency=', x$freq,
+				{if (x$freq != 'na') paste0('&frequency=', x$freq) else ''}, # Handle empty freqs e.g. FEDTARMDLR
 				'&aggregation_method=avg'
 			)) %>%
 			req_timeout(., 8000) %>%
@@ -148,7 +148,7 @@ get_fred_obs = function(pull_ids, api_key, .obs_start = '2000-01-01', .verbose =
 				date = as_date(date) - days({if (x$freq == 'w') 6 else 0}),
 				series_id = x$series_id,
 				value = as.numeric(value),
-				freq = x$freq
+				freq = ifelse(x$freq == 'na', NA, x$freq)
 			)
 	})
 
@@ -269,7 +269,7 @@ get_fred_obs_with_vintage = function(pull_ids, api_key, .obs_start = '2000-01-01
 				'&file_type=json',
 				'&realtime_start=', v$start, '&realtime_end=', v$end,
 				'&observation_start=', .obs_start, '&observation_end=', today,
-				'&frequency=', x$freq,
+				{if (x$freq != 'na') paste0('&frequency=', x$freq) else ''}, # Handle empty freqs e.g. FEDTARMDLR
 				'&aggregation_method=avg'
 				)
 
@@ -295,7 +295,7 @@ get_fred_obs_with_vintage = function(pull_ids, api_key, .obs_start = '2000-01-01
 					vintage_date = as_date(realtime_start),
 					series_id = x$series_id,
 					value = as.numeric(value),
-					freq = x$freq
+					freq = ifelse(x$freq == 'na', NA, x$freq)
 				)
 		}))
 

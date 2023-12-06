@@ -277,7 +277,6 @@ store_forecast_values_v2 = function(db, df, .store_new_only = F, .verbose = F) {
 #'
 #' @import dplyr
 #' @importFrom DBI dbExecute
-#' @importFrom lubridate today
 #' @importFrom purrr is_scalar_logical
 #'
 #' @export
@@ -295,8 +294,6 @@ store_forecast_hist_values_v2 = function(db, df, .verbose = F) {
 
 	initial_count = get_rowcount(db, 'forecast_hist_values_v2')
 	if (.verbose == T) message('***** Initial Count: ', initial_count)
-
-	today_string = today('US/Eastern')
 
 	insert_result = write_df_to_sql(
 		db,
@@ -322,3 +319,51 @@ store_forecast_hist_values_v2 = function(db, df, .verbose = F) {
 
 	return(list(forecast_hist_values = rows_added, forecast_hist_values_latest = rows_added_latest))
 }
+
+
+#' Store futures values in interest_rate_model_futures_values table
+#'
+#' This breaks up the dataframe into chunks of size 10000 and sends them into the database.
+#'
+#' @param db The database conenction object.
+#' @param df The dataframe of forecast values. Must include columns scrape_source, varname, expdate, tenor, vdate, and value.
+#' @param .verbose Echo error messages.
+#'
+#' @return The number of rows added
+#'
+#' @import dplyr
+#' @importFrom DBI dbExecute
+#' @importFrom purrr is_scalar_logical
+#'
+#' @export
+store_futures_values = function(db, df, .verbose = F) {
+
+	if (!inherits(db, 'PqConnection')) stop('Object "db" must be of class PgConnection')
+	if (!is.data.frame(df)) stop('Parameter "df" must be a data.frame.')
+	if (
+		length(colnames(df)) != 6 ||
+		!all(sort(colnames(df)) == sort(c('scrape_source', 'varname', 'expdate', 'tenor', 'vdate', 'value')))
+	) {
+		stop('Incorrect columns')
+	}
+	if (!is_scalar_logical(.verbose)) stop('Parameter ".verbose" must be a logical.')
+
+	initial_count = get_rowcount(db, 'interest_rate_model_futures_values')
+	if (.verbose == T) message('***** Initial Count: ', initial_count)
+
+	insert_result = write_df_to_sql(
+		db,
+		df,
+		'interest_rate_model_futures_values',
+		'ON CONFLICT (scrape_source, varname, expdate, tenor, vdate) DO UPDATE SET value=EXCLUDED.value',
+		.chunk_size = 10000,
+		.verbose = .verbose
+	)
+
+	final_count = get_rowcount(db, 'interest_rate_model_futures_values')
+	rows_added = final_count - initial_count
+	if (.verbose == T) message('***** Rows Added: ', rows_added)
+
+	return(list(interest_rate_model_futures_values = rows_added))
+}
+
