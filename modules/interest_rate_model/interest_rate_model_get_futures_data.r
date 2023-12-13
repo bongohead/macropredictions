@@ -1,7 +1,7 @@
 #' Gets futures values needed for interest_rate_model_run.r
 #'
 #' Usage:
-#' - Run this script before interest_rsate_model_run.r
+#' - Run this script before interest_rsate_model_run.r. Assumes futures with trade dates of today are non-final.
 #' - Runtime: with BACKFILL_MONTHS = 3: 15min
 
 # Initialize ----------------------------------------------------------
@@ -45,10 +45,10 @@ local({
 			# 	max_months_out = c(5, 5, 5, 1, 1, 1, 1) * 12
 			# )
 			tibble(
-				varname = c('sofr', 'sofr', 'ffr', 'bsby'),
-				ticker = c('SL', 'SQ', 'ZQ', 'BR'),
-				max_months_out = c(5, 5, 5, 5) * 12,
-				tenor = c('1m', '3m', '30d', '3m')
+				varname = c('sofr', 'sofr', 'ffr', 'bsby', 'sonia', 'sonia', 'estr'),
+				ticker = c('SL', 'SQ', 'ZQ', 'BR', 'J8', 'JU', 'EB'),
+				max_months_out = c(5, 5, 5, 5, 6, 5, 6) * 12,
+				tenor = c('1m', '3m', '30d', '3m', '3m', '1m', '3m')
 			)
 		) %>%
 		mutate(
@@ -66,16 +66,19 @@ local({
 
 	cleaned_data = raw_data %>%
 		left_join(., scrape_sources, by = 'code') %>%
+		# BSBY data is messed up, has old tradedates coming in - filter for product launch date
+		filter(., varname != 'bsby' | tradedate >= '2021-07-01') %>%
 		transmute(
 			.,
 			scrape_source = 'bc',
 			varname,
 			expdate = date,
 			tenor,
-			vdate = vdate - days(1),
+			tradedate,
+			is_final = ifelse(tradedate < today('US/Eastern'), T, F),
 			value = ifelse(str_detect(varname, '^t\\d\\dy$'), close, 100 - close)
 		) %>%
-		filter(., expdate >= floor_date(vdate, 'month')) # Get rid of forecasts for old observations
+		filter(., expdate >= floor_date(tradedate, 'month')) # Get rid of forecasts for old observations
 
 	scraped_data$bc <<- cleaned_data
 })
@@ -136,7 +139,7 @@ local({
 			if (x$last %in% c('0.000', '0.00', '-')) return() # Related bug in CME website
 			tibble(
 				vdate = last_trade_date,
-				date = ymd(x$expirationDate),
+				expdate = ymd(x$expirationDate),
 				value = {
 					if (str_detect(var$varname, '^t\\d\\dy$')) as.numeric(x$last)
 					else 100 - as.numeric(x$last)
@@ -151,23 +154,23 @@ local({
 	}))
 
 	cme_raw_data %>%
-		arrange(., date) %>%
+		arrange(., expdate) %>%
 		ggplot(.) +
-		geom_line(aes(x = date, y = value, color = cme_id))
+		geom_line(aes(x = expdate, y = value, color = cme_id))
 
 	cme_data =
 		cme_raw_data %>%
-		# Now use only one-month SOFR futures if it's the only available data
-		arrange(., date) %>%
+		arrange(., expdate) %>%
 		# Get rid of forecasts for old observations
-		filter(., date >= floor_date(last_trade_date, 'month') & value != 100) %>%
+		filter(., expdate >= floor_date(last_trade_date, 'month') & value != 100) %>%
 		transmute(
 			.,
 			scrape_source = 'cme',
 			varname,
-			expdate = date,
+			expdate,
 			tenor,
-			vdate = last_trade_date,
+			tradedate = last_trade_date,
+			is_final = ifelse(tradedate < today('US/Eastern'), T, F),
 			value
 			)
 
@@ -226,7 +229,8 @@ local({
 					varname = x$varname,
 					expdate = as_date(z$date),
 					tenor = x$tenor,
-					vdate = as_date(parse_date_time(vdate, orders = '%a %b %d %H:%M:%S %Y'), tz = 'ET'),
+					tradedate = as_date(parse_date_time(vdate, orders = '%a %b %d %H:%M:%S %Y'), tz = 'ET'),
+					is_final = ifelse(tradedate < today('US/Eastern'), T, F),
 					value = 100 - value
 				)
 		))
@@ -239,43 +243,44 @@ local({
 #' AMERIBOR futures
 local({
 
+	scrape_dates = seq(
+		max(today('US/Eastern') - months(BACKFILL_MONTHS), as_date('2019-08-16')), # Ameribor futures launch date
+		to = today('US/Eastern'),
+		by = '1 day'
+		)
+
+	scrape_reqs = map(scrape_dates, \(d)
+		request(str_glue('https://www.cboe.com/us/futures/market_statistics/settlement/csv?dt={d}'))
+		)
+
+	responses = macropredictions::send_async_requests(scrape_reqs, .chunk_size = 10, .max_retries = 5)
+
+	csv_data = list_rbind(compact(imap(responses, function(r, i) {
+		raw_str = resp_body_string(r)
+		if (str_length(raw_str) <= 50) return(NULL)
+		read_csv(raw_str, col_names = c('prod', 'sym', 'expdate', 'price'), col_types = 'ccDn', skip = 1) %>%
+			mutate(., tradedate = as_date(scrape_dates[[i]]))
+	})))
+
 	cboe_data =
-		request('https://www.cboe.com/us/futures/market_statistics/settlement/') %>%
-		req_perform %>%
-		resp_body_html %>%
-		html_elements(., 'ul.document-list > li > a') %>%
-		map(., function(x)
-			tibble(
-				vdate = as_date(str_sub(html_attr(x, 'href'), -10)),
-				url = paste0('https://cboe.com', html_attr(x, 'href'))
-			)
-		) %>%
-		map(., function(x)
-			read_csv(x$url, col_names = c('product', 'symbol', 'exp_date', 'price'), col_types = 'ccDn', skip = 1) %>%
-				filter(., product %in% c('AMT1', 'AMB1', 'AMB3')) %>%
-				transmute(
-					.,
-					product,
-					vdate = as_date(x$vdate),
-					date = floor_date(exp_date - months(1), 'months'),
-					value = 100 - price/100
-				)
-		) %>%
-		list_rbind %>%
+		csv_data %>%
+		filter(., prod %in% c('AMT1', 'AMB1', 'AMB3')) %>%
 		mutate(., tenor = case_when(
-			product == 'AMB1' ~ '1m',
-			product == 'AMB3' ~ '3m',
-			product == 'AMT1' ~ '30d'
+			prod == 'AMB1' ~ '1m',
+			prod == 'AMB3' ~ '3m',
+			prod == 'AMT1' ~ '30d'
 		)) %>%
 		transmute(
 			.,
 			scrape_source = 'cboe',
 			varname = 'ameribor',
-			expdate = date,
+			expdate = floor_date(expdate - months(1), 'months'),
 			tenor,
-			vdate,
-			value
-		)
+			tradedate,
+			is_final = ifelse(tradedate < today('US/Eastern'), T, F),
+			value = 100 - price/100
+		) %>%
+		filter(., tradedate == max(tradedate))
 
 	scraped_data$cboe <<- cboe_data
 })
@@ -291,118 +296,9 @@ local({
 
 	# Log
 	validation_log$rows_added <<- rows_added
-	validation_log$last_vdate <<- max(futures_values$vdate)
+	validation_log$last_tradedate <<- max(futures_values$tradedate)
 
 	disconnect_db(pg)
 
 	futures_values <<- futures_values
 })
-
-
-# fred_data =
-# 	get_fred_obs(c('T3MFF'), Sys.getenv('FRED_API_KEY'), .obs_start = '1980-01-01') %>%
-# 	mutate(., value = zoo::rollmean(value, k = 1, align = 'right', fill = NA)) %>%
-# 	transmute(., spread_vdate = date, spread = value) %>%
-# 	na.omit()
-#
-# fred_data %>% ggplot() + geom_line(aes(x = spread_vdate, y = spread))
-#
-# spf_data = collect(tbl(pg, sql(
-# 	"SELECT vdate, date, d1 AS spf
-# 	FROM forecast_values_v2_all
-# 	WHERE forecast = 'spf' AND varname IN ('t03m')"
-# 	))) %>%
-# 	left_join(fred_data, join_by(closest(vdate >= spread_vdate))) %>%
-# 	mutate(., spf = spf - 0)
-#
-# futures_data = barchart_data %>% transmute(., vdate, date, fut = value)
-# # collect(tbl(pg, sql(
-# # 	"SELECT vdate, date, d1 AS fut
-# # 	FROM forecast_values_v2_all
-# # 	WHERE varname IN ('ffr') AND forecast = 'int'"
-# # )))
-#
-# futures_data_q =
-# 	futures_data %>%
-# 	mutate(., date = floor_date(date, 'quarter')) %>%
-# 	group_by(., vdate, date) %>%
-# 	summarize(., fut = mean(fut), n = n(), .groups = 'drop') %>%
-# 	filter(., n >= 3)
-#
-# annualized_term_premiums =
-# 	spf_data %>%
-# 	mutate(., vdate = vdate - days(7)) %>%
-# 	# mutate(., vdate = floor_date(vdate, 'quarter')) %>%
-# 	filter(., date >= vdate - months(3)) %>%
-# 	inner_join(rename(futures_data_q, fut_vdate = vdate), join_by(date, closest(vdate >= fut_vdate))) %>%
-# 	filter(., interval(vdate, fut_vdate)/days(1) >= -7) %>%
-# 	mutate(
-# 		.,
-# 		months_ahead = interval(floor_date(vdate, 'quarter'), floor_date(date, 'quarter'))/months(1) + 2,
-# 		diff = fut - spf,
-# 		) %>%
-# 	# {inner_join(
-# 	# 	filter(., months_ahead != 2),
-# 	# 	transmute(filter(., months_ahead == 2), vdate, diff_init = diff),
-# 	# 	by = 'vdate'
-# 	# 	)} %>%
-# 	# mutate(., diff = diff - diff_init) %>%
-#  	mutate(., cum_atp = 100 * ((1 + diff/100)^(12/months_ahead) - 1)) %>%
-# 	filter(., months_ahead %in% c(5, 14)) %>%
-# 	select(., -c(fut_vdate, n))
-#
-# annualized_term_premiums %>%
-# 	filter(., year(vdate) >= 2005) %>%
-# 	ggplot() +
-# 	geom_line(aes(x = vdate, y = diff, group = months_ahead, color = as.factor(months_ahead)))
-#
-# atps =
-# 	annualized_term_premiums %>%
-# 	arrange(., vdate, months_ahead) %>%
-# 	group_by(., vdate) %>%
-# 	mutate(., end = months_ahead, start = coalesce(lag(end, 1), 0) + 1, dur = end - start + 1) %>%
-# 	mutate(
-# 		.,
-# 		# Cumulative premium
-# 		cum_prem = (1 + diff/100)^(12/months_ahead),
-# 		chg_from_cum_prem = cum_prem/coalesce(dplyr::lag(cum_prem, 1), 1),
-# 		atp = 100 * (chg_from_cum_prem^(1/dur) - 1)
-# 		) %>%
-# 	ungroup(.) %>%
-# 	mutate(., time = paste0(start, '-', end)) %>%
-# 	mutate(., time = case_when(
-# 		time == '1-5' ~ 'Forecast date through end of 1Q ahead',
-# 		# time == '3-5' ~ 'Start of 1Q',
-# 		# time == '6-8' ~ 'Start of 2Q through end of 2Q',
-# 		# time == '6-11' ~ 'Start of 3Q through end of 3Q',
-# 		time == '6-14' ~ 'Start of 2Q ahead through end of 4Q ahead',
-# 		.default = NA
-# 	)) %>%
-# 	na.omit(.)
-#
-# # atps %>%
-# # 	nest(., .by = 'vdate') %>%
-# # 	sample_n(., 30) %>%
-# # 	unnest(., cols = c(data)) %>%
-# # 	ggplot(.) +
-# # 	geom_line(aes(x = months_ahead, y = atp)) +
-# # 	geom_point(aes(x = months_ahead, y = atp)) +
-# # 	facet_wrap(vars(vdate))
-#
-# atps %>%
-# 	filter(., year(vdate) >= 2003) %>%
-# 	# filter(., n() >= 4, .by = 'vdate') %>%
-# 	mutate(., atp_sm = predict(smooth.spline(atp, spar = .01))$y, .by = c(time)) %>%
-# 	ggplot() +
-# 	geom_line(aes(x = vdate, y = atp_sm, group = time, color = time)) +
-# 	geom_point(aes(x = vdate, y = atp_sm, group = time, color = time)) +
-# 	# pivot_wider(., id_cols = vdate, names_from = months_ahead, values_from = diff, names_prefix = 'months_ahead_') %>%
-# 	# ggplot() +
-# 	# geom_line(aes(x = vdate, y = months_ahead_0)) +
-# 	# geom_line(aes(x = vdate, y = months_ahead_6), color = 'blue') +
-# 	# geom_line(aes(x = vdate, y = months_ahead_12), color = 'red') +
-# 	facet_wrap(vars(time)) +
-# 	geom_hline(yintercept = 0) +
-# 	labs(x = 'Vintage Date', y = 'Months Ahead', color = 'Term') +
-# 	ggthemes::theme_fivethirtyeight()
-#
