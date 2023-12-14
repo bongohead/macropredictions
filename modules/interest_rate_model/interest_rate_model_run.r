@@ -1,18 +1,17 @@
-#' Historical data lags:
-#' - FFR/SOFR: 1 day lag (9am ET) -> shift vdate = date + 1 day
-#' - Treasury data: day of but before model run -> vdate = date + 1 day
-#' - Bloomberg indices: day of -> vdate = date
-#' - AFX indices: 1 day lag (8am ET) -> vdate = date + 1 day
-#' - BOE: 1 day lag(?) vdate = date
-#' Historical vintage dates are assigned given these assumptions!
+#' Historical data lags used for vintage assignments
 #'
-#' TBD:
-#' - Add vintage testing for mortgage rates
+#' 10am:
+#' - FFR/SOFR: 1 day lag (updated next-day at 9am ET)
+#' - Treasury data: 1 day lag (publishes same-day at 3pm ET)
+#' - Bloomberg indices: day of/realtime (but still assume 1 day lag, see hist BLOOM sec)
+#' - AFX indices: 1 day lag (updated next-day at 8am ET)
+#' - BOE: 1 day lag
+#' - Futures: 1 day lag: (updated same-day at 3pm ET)
 #'
 #' Validated 12/6/23
 
 # Initialize ----------------------------------------------------------
-BACKTEST_MONTHS = 24
+BACKTEST_MONTHS = 240
 STORE_NEW_ONLY = F
 
 validation_log <<- list()
@@ -24,7 +23,6 @@ library(tidyverse)
 library(httr2)
 library(rvest)
 library(data.table)
-library(forecast, include.only = c('forecast', 'Arima'))
 load_env()
 
 ## Load Data ----------------------------------------------------------
@@ -39,7 +37,6 @@ input_sources = get_query(pg, 'SELECT * FROM interest_rate_model_variables')
 # Historical Data ----------------------------------------------------------
 
 ## FRED ----------------------------------------------------------
-# Vintages release with 1-day lag relative to current vals.
 local({
 
 	# Get historical data with latest release date
@@ -52,7 +49,7 @@ local({
 		filter(input_sources, hist_source == 'fred') %>%
 		df_to_list	%>%
 		map(., \(x) c(x$hist_source_key, x$hist_source_freq)) %>%
-		get_fred_obs(., api_key, .obs_start = '2005-01-01', .verbose = T) %>%
+		get_fred_obs_with_vintage(., api_key, .obs_start = '2005-01-01', .verbose = F) %>%
 		left_join(
 			.,
 			select(input_sources, 'varname', 'hist_source_key'),
@@ -60,13 +57,7 @@ local({
 			relationship = 'many-to-one'
 			) %>%
 		select(., -series_id) %>%
-		# For simplicity, assume all data with daily frequency is released the same day.
-		# Only weekly/monthly data keeps the true vintage date.
-		mutate(., vdate = case_when(
-			freq == 'd' ~ date + days(1),
-			str_detect(varname, 'mort') ~ date + days(7),
-			TRUE ~ NA_Date_
-		))
+		rename(., vdate = vintage_date)
 
 	hist$fred <<- fred_data
 })
@@ -146,7 +137,7 @@ local({
 					varname = x$varname,
 					freq = 'd',
 					date = as_date(dateTime),
-					vdate = date,
+					vdate = date + days(1),
 					value
 					) %>%
 				na.omit
@@ -230,141 +221,51 @@ local({
 	 hist$boe <<- boe_data
 })
 
+## Yahoo -----------------------------------------------------------
+local({
+
+	obs =
+		get_yahoo_data('^GSPC') %>%
+		mutate(., value = (value/dplyr::lag(value, 90) - 1) * 100) %>%
+		na.omit() %>%
+		transmute(., vdate = date + days(1), varname = 'sp500tr', date = date, freq = 'd', value)
+
+	hist$yahoo <<- obs
+})
+
 ## Store in SQL ----------------------------------------------------------
 local({
 
 	message('**** Storing SQL Data')
 
-	hist_values =
-		bind_rows(hist) %>%
-		bind_rows(
-			.,
-			filter(., freq %in% c('d', 'w')) %>%
-				mutate(., date = floor_date(date, 'months'), freq = 'm') %>%
-				group_by(., varname, freq, date) %>%
-				summarize(., value = mean(value), .groups = 'drop')
-			) %>%
-		# vdate is the same as date
-		mutate(., vdate = date, form = 'd1')
+	hist_values = bind_rows(hist)
+	#%>%
+		# bind_rows(
+		# 	.,
+		# 	filter(., freq %in% c('d', 'w')) %>%
+		# 		mutate(., date = floor_date(date, 'months'), freq = 'm') %>%
+		# 		group_by(., varname, freq, date) %>%
+		# 		summarize(., value = mean(value), .groups = 'drop')
+		# 	) %>%
+		# # vdate is the same as date
+		# mutate(., vdate = date, form = 'd1')
 
-	initial_count = get_rowcount(pg, 'interest_rate_model_input_values')
-	message('***** Initial Count: ', initial_count)
-
-	sql_result = write_df_to_sql(
-		pg,
-		hist_values,
-		'interest_rate_model_input_values',
-		'ON CONFLICT (vdate, form, varname, freq, date) DO UPDATE SET value=EXCLUDED.value'
-	)
-
-	message('***** Rows Added: ', get_rowcount(pg, 'interest_rate_model_input_values') - initial_count)
+	# initial_count = get_rowcount(pg, 'interest_rate_model_input_values')
+	# message('***** Initial Count: ', initial_count)
+	#
+	# sql_result = write_df_to_sql(
+	# 	pg,
+	# 	hist_values,
+	# 	'interest_rate_model_input_values',
+	# 	'ON CONFLICT (vdate, form, varname, freq, date) DO UPDATE SET value=EXCLUDED.value'
+	# )
+	#
+	# message('***** Rows Added: ', get_rowcount(pg, 'interest_rate_model_input_values') - initial_count)
 
 	hist_values <<- hist_values
 })
 
 # Sub-Models  ----------------------------------------------------------
-
-#' Get (possibly-aggregated) data available at each vdate
-#'
-#' @description This function takes each vdate x varname combination, then for each date in .lags of vdate,
-#'  it pulls the latest vdate available.
-#'
-#' @param df A daily-level dataframe with columns varname, vdate, date
-#' @param .agg_freq The aggregation-level (month, quarter, day, week, year). NULL if no aggregation is used.
-#' @param .periods The maximum possible historical lags to keep for each vdate x varname in .agg_freq units.
-#'  Use 0 for same-period values only.
-#' @param .agg_func The function used for aggregation.
-#' @param
-#'
-#' @examples \dontrun{
-#' # Get the latest
-#'
-#' }
-#'
-#' @import dplyr lubridate
-#' @importFrom lubridate add_with_rollback day week month quarter year
-#'
-#' @export
-get_available_aggs_by_vdate = function(df, .agg_freq, .lags, .agg_func = mean, .agg_func_eop = .agg_func) {
-
-	.freq_fn = {
-		if (.agg_freq %in% c('day', 'days')) days
-		else if (.agg_freq %in% c('week', 'weeks')) weeks
-		else if (.agg_freq %in% c('month', 'months')) months
-		else if (.agg_freq %in% c('quarter', 'quarters')) quarter
-		else if (.agg_freq %in% c('year', 'years')) years
-		else stop('Invalid frequency')
-	}
-
-	# Get unique varname x vdate combinations, then add desired dates
-	unique_varname_vdates =
-		expand_grid(distinct(df, varname, vdate), lag = .lags) %>%
-		mutate(., date = add_with_rollback(floor_date(vdate, .agg_freq), .freq_fn(lag)))
-
-	unique_varname_vdates %>%
-		inner_join(
-			.,
-			transmute(df, varname, trailing_vdate = vdate, value, date = floor_date(date, .agg_freq)),
-			join_by(date, varname, closest(vdate >= trailing_vdate))
-		) %>%
-		group_by(., varname, vdate, date) %>%
-		summarize(., value = mean(value), .groups = 'drop')
-}
-
-#' Get latest date available at each vdate, varname
-#'
-#' @description This function takes each vdate x varname combination, then grids them with .periods.
-#'  For each vdate x varname x .periods combination, it then pulls the latest vdate available.
-#'
-#' @param varname_vdates_df A dataframe with desired vdate x varname x  combinations (must have cols varname, vdate).
-#' @param input_df A df with data (must have cols varname, vdate, date).
-#' @param .freq The aggregation-level of the dates.
-#' @param periods The maximum possible historical lags relative to vdate to keep for each vdate x varname.
-#'  Use 0 for same-period values only.
-#'
-#' @examples \dontrun{
-#' # Suppose each PCE release is 29 days after the date
-#' # Get the available 3-month lag history for each date between 1/1/1970 and 3/1/1970
-#' data(economics)
-#' mydata = transmute(economics, date, vdate = date + days(29), value = pce, varname = 'pce')
-#' get_available_data_by_vdate(
-#' 	tibble(vdate = seq(from = as_date('1970-01-01'), to = as_date('1970-03-01'), by = '1 month'), varname = 'pce'),
-#'	mydata,
-#'	-2:0,
-#'	'month'
-#' )
-#' }
-#'
-#' @import dplyr
-#' @importFrom lubridate add_with_rollback day week month quarter year
-#'
-#' @export
-get_available_data_by_vdate = function(varname_vdates_df, input_df, periods, .freq) {
-
-	# Get unique varname x vdate combinations, then add desired dates
-	.freq_fn = {
-		if (.agg_freq %in% c('day', 'days')) days
-		else if (.agg_freq %in% c('week', 'weeks')) weeks
-		else if (.agg_freq %in% c('month', 'months')) months
-		else if (.agg_freq %in% c('quarter', 'quarters')) quarter
-		else if (.agg_freq %in% c('year', 'years')) years
-		else stop('Invalid frequency')
-	}
-
-	unique_varname_vdates =
-		expand_grid(varname_vdates_df, shift = periods) %>%
-		mutate(., date = add_with_rollback(floor_date(vdate, .freq), .freq_fn(shift)))
-
-	unique_varname_vdates %>%
-		left_join(
-			.,
-			transmute(input_df, varname, trailing_vdate = vdate, value, date = floor_date(date, .freq)),
-			join_by(date, varname, closest(vdate >= trailing_vdate))
-		)
-}
-
-
-
 
 ## FFR/SOFR/BSBY  ----------------------------------------------------------
 local({
@@ -411,7 +312,7 @@ local({
 			)
 
 	# Backfill start-0 values with historical data if there's no forecast (BSBY & SOFR issues)
-	hist_daily = filter(bind_rows(hist), freq == 'd' & varname %in% c('ffr', 'bsby', 'sofr'))
+	hist_daily = filter(hist_values, freq == 'd' & varname %in% c('ffr', 'bsby', 'sofr'))
 
 	# Get existing same-month mean values for each vdate
 	hist_by_vdate =
@@ -433,7 +334,7 @@ local({
 			join_by(varname, months_out, date, closest(vdate >= hist_vdate))
 			) %>%
 		mutate(., value = ifelse(is.na(value), month_avg, value)) %>%
-		# Some are still empty, so join in last available data as well even if not in the same month
+		# Some vdate/varname/dates still empty, so join in last available data as well even if not in the same month
 		left_join(
 			.,
 			transmute(
@@ -442,6 +343,8 @@ local({
 				),
 			join_by(varname, months_out, date >= hist_d_date, closest(vdate >= hist_d_vdate))
 		) %>%
+		# Needed in case there are different hist_d_dates with same hist_d_vdate
+		slice_max(., hist_d_date, by = c(vdate, varname, date)) %>%
 		mutate(., value = ifelse(is.na(value), hist_d_value, value)) %>%
 		select(., vdate, varname, months_out, date, value, max_months_out)
 
@@ -548,7 +451,7 @@ local({
 		filter(., months_out <= max_months_out)
 
 	# Backfill start-0 values with historical data if there's no forecast
-	hist_daily = filter(bind_rows(hist), freq == 'd' & varname %in% c('sonia', 'estr'))
+	hist_daily = filter(hist_values, freq == 'd' & varname %in% c('sonia', 'estr'))
 
 	# Get existing same-month mean values for each vdate, and the prev-month final values
 	hist_by_vdate =
@@ -579,6 +482,8 @@ local({
 			),
 			join_by(varname, months_out, date >= hist_d_date, closest(vdate >= hist_d_vdate))
 		) %>%
+		# Needed in case there are different hist_d_dates with same hist_d_vdate
+		slice_max(., hist_d_date, by = c(vdate, varname, date)) %>%
 		mutate(., value = ifelse(is.na(value), hist_d_value, value)) %>%
 		select(., vdate, varname, months_out, date, value, max_months_out)
 
@@ -638,10 +543,13 @@ local({
 		ukbankrate
 	)
 
-	final_df %>%
+	series_chart =
+		final_df %>%
 		filter(., vdate == max(vdate)) %>%
 		ggplot() +
 		geom_line(aes(x = date, y = value, color = varname, group = varname))
+
+	print(series_chart)
 
 	submodels$ice <<- final_df
 })
@@ -658,11 +566,16 @@ local({
 	message('***** Adding Treasury Forecasts')
 	message('****** Getting input data')
 
+	# Subtract a year  for EH forecasts backtests, less for others
+	earliest_ffr = min(filter(submodels$cme, varname == 'ffr')$vdate)
+	backtest_vdates_eh = seq(
+		from = max(earliest_ffr, today('US/Eastern') - months(BACKTEST_MONTHS + 12)),
+		to = today('US/Eastern'),
+		by = '1 day'
+	)
+
 	backtest_vdates = seq(
-		from = max(
-			min(filter(submodels$cme, varname == 'ffr')$vdate),
-			today('US/Eastern') - months(BACKTEST_MONTHS)
-			),
+		from = max(earliest_ffr, today('US/Eastern') - months(BACKTEST_MONTHS)),
 		to = today('US/Eastern'),
 		by = '1 day'
 	)
@@ -676,14 +589,14 @@ local({
 		arrange(., ttm)
 
 	fred_data =
-		bind_rows(hist$fred, hist$treasury) %>%
-		filter(., str_detect(varname, '^t\\d{2}[m|y]$') | varname == 'ffr') %>%
-		select(., -vdate)
+		hist_values %>%
+		filter(., str_detect(varname, '^t\\d{2}[m|y]$') | varname == 'ffr')
 
 	ffr_d_obs = fred_data %>% filter(., varname == 'ffr')
 	treas_d_obs = fred_data %>% filter(., varname != 'ffr')
 
 	tdns <<- list()
+	tdns$backtest_vdates_eh <<- backtest_vdates_eh
 	tdns$backtest_vdates <<- backtest_vdates
 	tdns$ttm_varname_map <<- ttm_varname_map
 	tdns$ffr_d_obs <<- ffr_d_obs
@@ -693,11 +606,13 @@ local({
 ### 2. Riskless Forecasts ------------------------------------------------------
 local({
 
+	message('****** Adding riskless forecasts')
+
 	ffr_lt_obs = get_fred_obs('FEDTARMDLR', Sys.getenv('FRED_API_KEY')) %>% transmute(lt_vdate = date, lt = value)
 
 	rf_annualized =
 		submodels$cme %>%
-		filter(., vdate %in% tdns$backtest_vdates & varname == 'ffr') %>%
+		filter(., vdate %in% tdns$backtest_vdates_eh & varname == 'ffr') %>%
 		transmute(., vdate, value = 100 * ((1 + value/100/360)^360 - 1), date) %>%
 		arrange(vdate) %>%
 		mutate(., months_out = interval(floor_date(vdate, 'month'), date) %/% months(1))
@@ -719,7 +634,7 @@ local({
 			filter(., date >= vdate - months(1)) %>%
 			mutate(., period = cur_group_id(), .by = vdate)
 		) %>%
-		filter(., vdate >= tdns$backtest_vdates[[1]]) %>%
+		filter(., vdate >= tdns$backtest_vdates_eh[[1]]) %>%
 		ggplot() +
 		geom_line(aes(x = date, y = value, color = type, group = period, linetype = type, linewidth = type)) +
 		scale_color_manual(
@@ -873,16 +788,22 @@ local({
 ### 3. TDNS fit ------------------------------------------------------------------
 local({
 
+	message('****** Adding expectations forecasts')
+
 	# Get available-vintage data
 	# Get available historical data at each vintage date, up to 36 months of history
 	hist_df_unagg =
-		tibble(vdate = tdns$backtest_vdates) %>%
+		tibble(vdate = tdns$backtest_vdates_eh) %>%
 		mutate(., floor_vdate = floor_date(vdate, 'month'), min_date = floor_vdate - months(36)) %>%
 		left_join(
 			.,
-			mutate(bind_rows(tdns$ffr_d_obs, tdns$treas_d_obs), floor_date = floor_date(date, 'month')),
-			# !! Only pulls dates that are strictly less than the vdate (1 day EFFR delay in FRED)
-			join_by(vdate > date, min_date <= date)
+			bind_rows(tdns$ffr_d_obs, tdns$treas_d_obs) %>%
+				transmute(
+					.,
+					varname, value, date,
+					floor_date = floor_date(date, 'month'), hist_vdate = vdate
+				),
+			join_by(vdate >= hist_vdate, min_date <= date)
 		) %>%
 		mutate(., is_current_month = floor_vdate == floor_date) %>%
 		select(., -min_date, -floor_vdate)
@@ -1170,11 +1091,15 @@ local({
 		geom_line(aes(x = vdate, y = value, color = varname))
 
 	# Check spread history
-	bind_rows(
-		mutate(expectations_forecasts, type = 'forecast'),
-		mutate(tdns$treas_d_obs, vdate = date, type = 'hist')
-	) %>%
-		filter(., vdate >= min(expectations_forecasts$vdate)) %>%
+	# bind_rows(
+	# 	mutate(expectations_forecasts, type = 'forecast') %>%
+	# 		filter(., vdate >= min(expectations_forecasts$vdate)),
+	# 	mutate(tdns$treas_d_obs, vdate = date, type = 'hist')
+	# ) %>%
+
+
+	# mutate(tdns$treas_d_obs, vdate = date, type = 'hist') %>%
+	mutate(expectations_forecasts, type = 'forecast') %>%
 		pivot_wider(., id_cols = c(vdate, date, type), names_from = varname, values_from = value) %>%
 		mutate(., spread = t10y - t02y) %>%
 		mutate(., months_ahead = ifelse(type == 'hist', -1, interval(vdate, date) %/% months(1))) %>%
@@ -1206,6 +1131,7 @@ local({
 			tdns3 = .3 * (2 * t02y - t03m - t10y)
 		)
 
+	tdns$dns_coefs_host <<- dns_coefs_hist
 	tdns$optim_lambdas <<- optim_lambdas
 	tdns$expectations_forecasts <<- expectations_forecasts
 	tdns$dns_coefs_forecast <<- dns_coefs_forecast
@@ -1215,6 +1141,7 @@ local({
 local({
 
 	#### Add in LT term premium
+	message('****** Add LT term premium')
 
 	# Current spreads
 	spf_1 = collect(tbl(pg, sql(
@@ -1245,8 +1172,6 @@ local({
 		left_join(., spf_1 %>% group_by(., vdate) %>% summarize(., reldate = min(date)), by = 'reldate') %>%
 		arrange(., vdate) %>%
 		pivot_longer(., -c(reldate, vdate, varname), names_to = 'out') %>%
-		##
-		# transmute(., vdate, varname, value, date = floor_date(vdate + years(ifelse(out == 'C', 2, 3)), 'quarter'))
 		mutate(., new_year = add_with_rollback(floor_date(vdate, 'year'), years(ifelse(out == 'C', 2, 3)))) %>%
 		expand_grid(., quarters = 2:4) %>%
 		mutate(., date = add_with_rollback(new_year, months((quarters - 1) * 3))) %>%
@@ -1311,11 +1236,7 @@ local({
 
 	print(tps_by_block_plot)
 
-	sp500_obs =
-		get_fred_obs('SP500', Sys.getenv('FRED_API_KEY')) %>%
-		mutate(., vdate = date + days(1), sp500 = (value/dplyr::lag(value, 90) - 1) * 100) %>%
-		na.omit() %>%
-		transmute(., vdate, sp500)
+	sp500 = filter(hist$yahoo, varname == 'sp500tr')
 
 	ffr_forecasts = transmute(tdns$rf_annualized, vdate, months_out, ffr_forecast = value)
 
@@ -1650,6 +1571,7 @@ local({
 local({
 
 	### Smooth with historical data
+	message('****** Smoothing with historical data')
 
 	# https://en.wikipedia.org/wiki/Logistic_function
 	get_logistic_x0 = function(desired_y_intercept, k = 1) {
@@ -1835,8 +1757,7 @@ local({
 		filter(merged_forecasts, floor_date(vdate, 'month') == date & varname == 't01m') %>%
 		left_join(
 			tibble(vdate = tdns$backtest_vdates) %>%
-				# !! Only pulls dates that are strictly less than the vdate (1 day EFFR delay in FRED)
-				left_join(., tdns$treas_d_obs, join_by(closest(vdate > date))) %>%
+				left_join(., rename(tdns$treas_d_obs, hist_vdate = vdate), join_by(closest(vdate > hist_vdate))) %>%
 				transmute(., vdate, varname, last_date = date, last_value = value),
 			by = c('varname', 'vdate'),
 			relationship = 'one-to-one'
@@ -2249,6 +2170,8 @@ local({
 			),
 			join_by(varname, months_out, date >= hist_d_date, closest(vdate >= hist_d_vdate))
 		) %>%
+		# Needed in case there are different hist_d_dates with same hist_d_vdate
+		slice_max(., hist_d_date, by = c(vdate, varname, date)) %>%
 		mutate(., value = ifelse(is.na(value), hist_d_value, value)) %>%
 		select(., vdate, varname, months_out, date, value, max_months_out)
 
@@ -2286,13 +2209,14 @@ local({
 			df %>%
 				mutate(., value = zoo::na.locf(value)) %>%
 				mutate(., ffr_based_forecast = ameribor_hist - ffr_hist + ffr_pred) %>%
-				mutate(., value = .5 * value + .5 * ffr_based_forecast)
+				mutate(., value = .15 * value + .85 * ffr_based_forecast)
 		}) %>%
 		list_rbind() %>%
 		transmute(., vdate, date, freq = 'm', value, varname = 'ameribor')
 
 	# Plot comparison against TDNS
-	cboe_data %>%
+	cboe_plot =
+		cboe_data %>%
 		filter(., vdate == max(vdate)) %>%
 		bind_rows(
 			.,
@@ -2302,159 +2226,107 @@ local({
 		ggplot(.) +
 		geom_line(aes(x = date, y = value, color = varname, group = varname))
 
+	print(cboe_plot)
+
 	submodels$cboe <<- cboe_data
 })
 
 ## MORT ----------------------------------------------------------
 local({
 
-	# Calculate historical mortgage curve spreads
-	input_df =
-		# Get historical monthly averages
-		bind_rows(hist$fred, hist$treasury) %>%
-		filter(., varname %in% c('t10y', 't20y', 't30y', 'mort15y', 'mort30y')) %>%
-		mutate(., date = floor_date(date, 'months')) %>%
-		group_by(., varname, date) %>%
-		summarize(., value = mean(value), .groups = 'drop') %>%
-		# Pivot out and calculate spreads
-		pivot_wider(., id_cols = 'date', names_from = 'varname', values_from = 'value') %>%
+	backtest_vdates = seq(
+		from = today('US/Eastern') - months(BACKTEST_MONTHS),
+		to = today('US/Eastern'),
+		by = '1 day'
+	)
+
+	desired_hists = expand_grid(
+		vdate = backtest_vdates,
+		months_back = -36:0,
+		varname = c('t10y', 't20y', 't30y', 'mort15y', 'mort30y', 'ffr')
+		) %>%
+		mutate(., date = add_with_rollback(floor_date(vdate, 'month'), months(months_back)))
+
+	# Backfill start-0 values with historical data if there's no forecast
+	hist_daily = filter(bind_rows(hist$fred, hist$treasury), varname %in% desired_hists$varname)
+
+	# Month-avgs
+	month_avgs =
+		desired_hists %>%
+		inner_join(
+			.,
+			transmute(hist_daily, varname, trailing_vdate = vdate, value, date = floor_date(date, 'month')),
+			join_by(date, varname, vdate >= trailing_vdate)
+		) %>%
+		group_by(., varname, vdate, date) %>%
+		summarize(., value = mean(value), .groups = 'drop')
+
+	filled_data = left_join(desired_hists, month_avgs, join_by(varname, date, vdate))
+
+	reg_data =
+		filled_data %>%
+		# pivot to vdate x date level
+		pivot_wider(., id_cols = c(vdate, date), names_from = 'varname', values_from = 'value') %>%
 		mutate(
 			.,
 			t15y = (t10y + t20y)/2,
 			spread15 = mort15y - t15y, spread30 = mort30y - t30y
-			) %>%
-		# Join on latest DNS coefs
-		# inner_join(., filter(tdns$dns_coefs_hist, vdate == max(vdate)), by = 'date') %>%
-		# select(date, spread15, spread30, tdns1, tdns2) %>%
-		select(., date, spread15, spread30) %>%
-		arrange(., date) %>%
-		mutate(., spread15.l1 = lag(spread15, 1), spread30.l1 = lag(spread30, 1)) %>%
-		na.omit(.)
-
-	pred_df =
-		tdns$dns_coefs_forecast %>%
-		filter(., vdate == max(vdate)) %>%
-		bind_rows(tail(filter(input_df, date < .$date[[1]]), 1), .)
-
-	# Include average of historical month as "forecast" period
-	coefs15 = matrix(lm(spread15 ~ spread15.l1, input_df)$coef, nrow = 1)
-	coefs30 = matrix(lm(spread30 ~ spread30.l1, input_df)$coef, nrow = 1)
-
-	spread_forecast = reduce(2:nrow(pred_df), function(accum, x) {
-		accum[x, 'spread15'] =
-			coefs15 %*% matrix(as.numeric(
-				# c(1, accum[[x, 'tdns1']], ... if included tdns1 as a covariate
-				c(1, accum[x - 1, 'spread15']),
-				nrow = 1
-				))
-		accum[x, 'spread30'] =
-			coefs15 %*% matrix(as.numeric(
-				c(1, accum[x - 1, 'spread30']),
-				nrow = 1
-			))
-		return(accum)
-		},
-		.init = pred_df
 		) %>%
-		.[2:nrow(.),] %>%
-		select(., date, spread15, spread30)
+		arrange(., vdate, date) %>%
+		mutate(., spread15.l1 = lag(spread15, 1), spread30.l1 = lag(spread30, 1), spread30.l2 = lag(spread30, 2))
 
-	mor_data =
+
+	spread_forecast = list_rbind(map(group_split(reg_data, vdate), function(df) {
+
+		spread30_lt = mean(df$spread30, na.rm = T)
+		spread15_lt = mean(df$spread15, na.rm = T)
+
+		spread30_l1 = tail(na.omit(df$spread30), 1)
+		spread15_l1 = tail(na.omit(df$spread15), 1)
+
+		# Diff a variant
+		tibble(vdate = df$vdate[[1]], months_out = 0:60) %>%
+			mutate(., lag_weight = 1 - tanh(months_out/30)) %>%
+			mutate(
+				.,
+				spread30 = spread30_l1 * lag_weight + spread30_lt * (1 - lag_weight),
+				spread15 = spread15_l1 * lag_weight + spread15_lt * (1 - lag_weight),
+			)
+	}))
+
+	mortgage_data =
+		spread_forecast %>%
+		mutate(., date = floor_date(vdate, 'month') %m+% months(months_out)) %>%
 		inner_join(
-			spread_forecast,
+			.,
 			submodels$tdns %>%
 				filter(., varname %in% c('t10y', 't20y', 't30y')) %>%
-				filter(., vdate == max(vdate)) %>%
-				pivot_wider(., id_cols = 'date', names_from = 'varname', values_from = 'value'),
-			by = 'date'
+				pivot_wider(., id_cols = c(date, vdate), names_from = varname, values_from = value),
+				# transmute(., ffr_vdate, date, value),
+			join_by(vdate, date)
 		) %>%
 		mutate(., mort15y = (t10y + t30y)/2 + spread15, mort30y = t30y + spread30) %>%
-		select(., date, mort15y, mort30y) %>%
-		pivot_longer(., -date, names_to = 'varname', values_to = 'value') %>%
+		select(., vdate, date, mort15y, mort30y) %>%
+		pivot_longer(., -c(vdate, date), names_to = 'varname', values_to = 'value') %>%
 		transmute(
 			.,
 			varname,
 			freq = 'm',
-			vdate = today(),
+			vdate,
 			date,
 			value
-			)
+		)
 
-	submodels$mor <<- mor_data
+	mort_plots =
+		mortgage_data %>%
+		filter(., vdate == max(vdate)) %>%
+		ggplot() +
+		geom_line(aes(x = date, y = value, color = varname))
+
+	print(mort_plots)
+
+	submodels$mort <<- mortgage_data
 })
-
-
-## ENG: BoE Bank Rate (DAILY) ----------------------------------------------------------
-# local({
-#
-# 	# Use monthly data from ICE
-#
-# 	# Now extract calendar dates of meetings
-# 	old_dates = as_date(c(
-# 		'2021-02-04', '2021-03-18', '2021-05-06', '2021-06-24', '2021-09-23', '2021-11-04', '2021-12-16'
-# 		))
-#
-# 	new_dates =
-# 		GET('https://www.bankofengland.co.uk/monetary-policy/upcoming-mpc-dates') %>%
-# 		content(.) %>%
-# 		html_nodes(., 'div.page-content') %>%
-# 		lapply(., function(x) {
-#
-# 			div_year = str_sub(html_text(html_node(x, 'h2')), 0, 4)
-#
-# 			month_dates =
-# 				html_text(html_nodes(x, 'table tbody tr td:nth-child(1)')) %>%
-# 				str_replace(., paste0(wday(now() + days(0:6), label = T, abbr = F), collapse = '|'), '') %>%
-# 				str_squish(.)
-#
-# 			paste0(month_dates, ' ', div_year) %>%
-# 				dmy(.)
-# 			}) %>%
-# 		unlist(.) %>%
-# 		as_date(.)
-#
-# 	# Join except for anything in new_dates already in old_dates
-# 	meeting_dates =
-# 		tibble(dates = old_dates, year = year(old_dates), month = month(old_dates)) %>%
-# 		bind_rows(
-# 			.,
-# 			anti_join(
-# 				tibble(dates = new_dates, year = year(new_dates), month = month(new_dates)),
-# 				.,
-# 				by = c('year', 'month')
-# 			)
-# 		) %>%
-# 		.$dates
-#
-#
-#
-# 	## Daily calculations
-# 	this_vdate = max(monthly_df$vdate)
-# 	this_monthly_df = monthly_df %>% filter(., vdate == this_vdate) %>% select(., -vdate, -freq)
-#
-# 	# Designate each period as a constant-rate time between meetings
-# 	periods_df =
-# 		meeting_dates %>%
-# 		tibble(period_start = ., period_end = lead(period_start, 1)) %>%
-# 		filter(., period_start >= min(this_monthly_df$date) & period_end <= max(this_monthly_df$date))
-#
-#
-# 	# For each period, see which months fall fully within them; if multiple, take the average;
-# 	# most periods will by none
-# 	periods_df %>%
-# 		purrr::transpose(.) %>%
-# 		map_dfr(., function(x)
-# 			this_monthly_df %>%
-# 				filter(., date >= x$period_start & ceiling_date(date, 'months') - days(1) <= x$period_end) %>%
-# 				summarize(., filled_value = mean(value, na.rm = T)) %>%
-# 				bind_cols(x, .) %>%
-# 				mutate(., filled_value = ifelse(is.nan(filled_value), NA, filled_value))
-# 			) %>%
-# 		mutate(., period_start = as_date(period_start), period_end = as_date(period_end))
-#
-# 	submodels$eng <<-
-# })
-
 
 # Finalize ----------------------------------------------------------
 

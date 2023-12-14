@@ -3,6 +3,9 @@
 #' Usage:
 #' - Run this script before interest_rsate_model_run.r. Assumes futures with trade dates of today are non-final.
 #' - Runtime: with BACKFILL_MONTHS = 3: 15min
+#'
+#' CME futures reflect 3pm ET closing data.
+#' https://www.cmegroup.com/confluence/display/EPICSANDBOX/Daily+Settlement+Time+Details
 
 # Initialize ----------------------------------------------------------
 BACKFILL_MONTHS = 3
