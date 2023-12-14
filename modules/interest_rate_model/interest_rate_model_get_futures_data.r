@@ -279,8 +279,7 @@ local({
 			tradedate,
 			is_final = ifelse(tradedate < today('US/Eastern'), T, F),
 			value = 100 - price/100
-		) %>%
-		filter(., tradedate == max(tradedate))
+		)
 
 	scraped_data$cboe <<- cboe_data
 })

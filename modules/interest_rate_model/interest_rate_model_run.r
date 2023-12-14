@@ -264,6 +264,108 @@ local({
 
 # Sub-Models  ----------------------------------------------------------
 
+#' Get (possibly-aggregated) data available at each vdate
+#'
+#' @description This function takes each vdate x varname combination, then for each date in .lags of vdate,
+#'  it pulls the latest vdate available.
+#'
+#' @param df A daily-level dataframe with columns varname, vdate, date
+#' @param .agg_freq The aggregation-level (month, quarter, day, week, year). NULL if no aggregation is used.
+#' @param .periods The maximum possible historical lags to keep for each vdate x varname in .agg_freq units.
+#'  Use 0 for same-period values only.
+#' @param .agg_func The function used for aggregation.
+#' @param
+#'
+#' @examples \dontrun{
+#' # Get the latest
+#'
+#' }
+#'
+#' @import dplyr lubridate
+#' @importFrom lubridate add_with_rollback day week month quarter year
+#'
+#' @export
+get_available_aggs_by_vdate = function(df, .agg_freq, .lags, .agg_func = mean, .agg_func_eop = .agg_func) {
+
+	.freq_fn = {
+		if (.agg_freq %in% c('day', 'days')) days
+		else if (.agg_freq %in% c('week', 'weeks')) weeks
+		else if (.agg_freq %in% c('month', 'months')) months
+		else if (.agg_freq %in% c('quarter', 'quarters')) quarter
+		else if (.agg_freq %in% c('year', 'years')) years
+		else stop('Invalid frequency')
+	}
+
+	# Get unique varname x vdate combinations, then add desired dates
+	unique_varname_vdates =
+		expand_grid(distinct(df, varname, vdate), lag = .lags) %>%
+		mutate(., date = add_with_rollback(floor_date(vdate, .agg_freq), .freq_fn(lag)))
+
+	unique_varname_vdates %>%
+		inner_join(
+			.,
+			transmute(df, varname, trailing_vdate = vdate, value, date = floor_date(date, .agg_freq)),
+			join_by(date, varname, closest(vdate >= trailing_vdate))
+		) %>%
+		group_by(., varname, vdate, date) %>%
+		summarize(., value = mean(value), .groups = 'drop')
+}
+
+#' Get latest date available at each vdate, varname
+#'
+#' @description This function takes each vdate x varname combination, then grids them with .periods.
+#'  For each vdate x varname x .periods combination, it then pulls the latest vdate available.
+#'
+#' @param varname_vdates_df A dataframe with desired vdate x varname x  combinations (must have cols varname, vdate).
+#' @param input_df A df with data (must have cols varname, vdate, date).
+#' @param .freq The aggregation-level of the dates.
+#' @param periods The maximum possible historical lags relative to vdate to keep for each vdate x varname.
+#'  Use 0 for same-period values only.
+#'
+#' @examples \dontrun{
+#' # Suppose each PCE release is 29 days after the date
+#' # Get the available 3-month lag history for each date between 1/1/1970 and 3/1/1970
+#' data(economics)
+#' mydata = transmute(economics, date, vdate = date + days(29), value = pce, varname = 'pce')
+#' get_available_data_by_vdate(
+#' 	tibble(vdate = seq(from = as_date('1970-01-01'), to = as_date('1970-03-01'), by = '1 month'), varname = 'pce'),
+#'	mydata,
+#'	-2:0,
+#'	'month'
+#' )
+#' }
+#'
+#' @import dplyr
+#' @importFrom lubridate add_with_rollback day week month quarter year
+#'
+#' @export
+get_available_data_by_vdate = function(varname_vdates_df, input_df, periods, .freq) {
+
+	# Get unique varname x vdate combinations, then add desired dates
+	.freq_fn = {
+		if (.agg_freq %in% c('day', 'days')) days
+		else if (.agg_freq %in% c('week', 'weeks')) weeks
+		else if (.agg_freq %in% c('month', 'months')) months
+		else if (.agg_freq %in% c('quarter', 'quarters')) quarter
+		else if (.agg_freq %in% c('year', 'years')) years
+		else stop('Invalid frequency')
+	}
+
+	unique_varname_vdates =
+		expand_grid(varname_vdates_df, shift = periods) %>%
+		mutate(., date = add_with_rollback(floor_date(vdate, .freq), .freq_fn(shift)))
+
+	unique_varname_vdates %>%
+		left_join(
+			.,
+			transmute(input_df, varname, trailing_vdate = vdate, value, date = floor_date(date, .freq)),
+			join_by(date, varname, closest(vdate >= trailing_vdate))
+		)
+}
+
+
+
+
 ## FFR/SOFR/BSBY  ----------------------------------------------------------
 local({
 
@@ -311,7 +413,7 @@ local({
 	# Backfill start-0 values with historical data if there's no forecast (BSBY & SOFR issues)
 	hist_daily = filter(bind_rows(hist), freq == 'd' & varname %in% c('ffr', 'bsby', 'sofr'))
 
-	# Get existing same-month mean values for each vdate, and the prev-month final values
+	# Get existing same-month mean values for each vdate
 	hist_by_vdate =
 		distinct(hist_daily, varname, vdate) %>%
 		mutate(., date = floor_date(vdate, 'month')) %>%
@@ -999,7 +1101,7 @@ local({
 	# and for each, iterate over the original "ttms" 1, 2, 3,
 	# ..., 120 and for each forecast the cumulative return for the yttm period ahead.
 	expectations_forecasts =
-		tdns$ttm_varname_map %>%
+		tdns$ttm_varname_map$ttm %>%
 		lapply(., function(yttm)
 			fitted_curve %>%
 				arrange(., vdate, ttm) %>%
@@ -1012,14 +1114,14 @@ local({
 				ungroup(.) %>%
 				filter(., ttm <= 120) %>%
 				mutate(., yttm = yttm) %>%
-				inner_join(., yield_curve_names_map, c('yttm' = 'ttm'))
+				inner_join(., tdns$ttm_varname_map, c('yttm' = 'ttm'))
 		) %>%
 		list_rbind %>%
 		mutate(., date = add_with_rollback(floor_date(vdate, 'months'), months(ttm - 1))) %>%
 		transmute(., vdate, ttm = yttm, varname, date, value = yttm_ahead_annualized_yield) %>%
 		inner_join(
 			.,
-			rf_annualized %>% transmute(., date, ffr_vdate = vdate, ffr = value),
+			tdns$rf_annualized %>% transmute(., date, ffr_vdate = vdate, ffr = value),
 			join_by(date, closest(vdate >= ffr_vdate)) # In practice, always equal
 		) %>%
 		transmute(., vdate, varname, date, value_norf = value, value = value + ffr)
@@ -1046,7 +1148,7 @@ local({
 		) %>%
 		mutate(., months_ahead = interval(floor_date(vdate, 'month'), date) %/% months(1)) %>%
 		filter(., months_ahead %in% c(1, 6, 12, 24, 36, 60)) %>%
-		left_join(., yield_curve_names_map, by = 'varname') %>%
+		left_join(., tdns$ttm_varname_map, by = 'varname') %>%
 		ggplot() +
 		geom_line(aes(x = ttm, y = value, color = as.factor(months_ahead), group = months_ahead)) +
 		facet_wrap(vars(vdate), nrow = 2) +
@@ -1057,7 +1159,7 @@ local({
 	# Plot curve forecasts vs ffr
 	expectations_forecasts %>%
 		filter(., vdate == max(vdate) & (date <= today() + years(5) & month(date) %in% c(1, 6))) %>%
-		left_join(., yield_curve_names_map, by = 'varname') %>%
+		left_join(., tdns$ttm_varname_map, by = 'varname') %>%
 		ggplot() +
 		geom_line(aes(x = ttm, y = value, color = as.factor(date), group = date))
 
@@ -1173,11 +1275,11 @@ local({
 		transmute(., varname, date, spf = value, spf_vdate = vdate) %>%
 		inner_join(
 			.,
-			transmute(expectations_forecasts, varname, date, eh = value, eh_vdate = vdate),
+			transmute(tdns$expectations_forecasts, varname, date, eh = value, eh_vdate = vdate),
 			join_by(date, varname, closest(spf_vdate >= eh_vdate))
 		) %>%
 		filter(., eh_vdate >= spf_vdate - days(7)) %>%
-		left_join(., yield_curve_names_map, by = 'varname') %>%
+		left_join(., tdns$ttm_varname_map, by = 'varname') %>%
 		mutate(
 			.,
 			months_ahead_start = interval(floor_date(spf_vdate, 'month'), date) %/% months(1),
@@ -1196,16 +1298,18 @@ local({
 			monthly_tp = 100 * ((1 + diff/100)^(1/12) - 1)
 		)
 
-	tps_by_block %>%
+	tps_by_block_plot =
+		tps_by_block %>%
 		filter(., months_ahead_start > 0 & varname == 't10y') %>%
 		ggplot() +
 		geom_line(
 			aes(x = spf_vdate, y = monthly_tp, color = as.factor(months_ahead_start), group = months_ahead_start)
 		) +
-		# facet_grid(cols = vars(varname)) +
 		ggthemes::theme_igray() +
 		labs(title = 'Estimated Monthly Term Premia', y = 'Estimated Term Premia', color = 'Months Forward', x = 'Release Date') +
 		theme(legend.position = 'right')
+
+	print(tps_by_block_plot)
 
 	sp500_obs =
 		get_fred_obs('SP500', Sys.getenv('FRED_API_KEY')) %>%
@@ -1213,25 +1317,25 @@ local({
 		na.omit() %>%
 		transmute(., vdate, sp500)
 
-	ffr_forecasts = rf_annualized %>% transmute(., vdate, months_out, ffr_forecast = value)
+	ffr_forecasts = transmute(tdns$rf_annualized, vdate, months_out, ffr_forecast = value)
 
 	models_by_vdate =
 		tps_by_block %>%
 		group_split(., spf_vdate) %>%
-		lapply(., function(df) {
+		map(., function(df) {
 
 			input_df =
 				tps_by_block %>%
 				filter(., spf_vdate <= df$spf_vdate[[1]] & spf_vdate >= df$spf_vdate[[1]] - months(12)) %>%
 				inner_join(
-					dns_coefs_forecast %>% select(., date, vdate, tdns1, tdns2, tdns3),
+					tdns$dns_coefs_forecast %>% select(., date, vdate, tdns1, tdns2, tdns3),
 					join_by(date, closest(spf_vdate >= vdate))
 				) %>%
 				inner_join(
 					ffr_forecasts,
 					join_by(months_ahead_start == months_out, closest(spf_vdate >= vdate))
 					) %>%
-				inner_join(sp500, join_by(closest(spf_vdate >= vdate))) %>%
+				inner_join(sp500_obs, join_by(closest(spf_vdate >= vdate))) %>%
 				mutate(
 					.,
 					logttm = ttm ^ .0609 - 1,
@@ -1282,17 +1386,17 @@ local({
 			# reg %>% summary(.)
 
 			test =
-				dns_coefs_forecast %>%
+				tdns$dns_coefs_forecast %>%
 				filter(., vdate <= max(df$spf_vdate)) %>%
 				slice_max(., vdate) %>%
 				mutate(., months_ahead_start = interval(floor_date(vdate, 'months'), date) %/% months(1)) %>%
-				mutate(., sp500 = tail(filter(sp500, vdate <= df$spf_vdate[[1]]), 1)$sp500) %>%
+				mutate(., sp500 = tail(filter(sp500_obs, vdate <= df$spf_vdate[[1]]), 1)$sp500) %>%
 				left_join(
 					.,
 					ffr_forecasts %>% filter(., vdate <= df$spf_vdate[[1]]) %>% filter(., vdate == max(vdate)),
 					join_by(months_ahead_start == months_out, closest(vdate >= vdate))
 				) %>%
-				expand_grid(yield_curve_names_map) %>%
+				expand_grid(tdns$ttm_varname_map) %>%
 				mutate(
 					.,
 					logttm = ttm ^ .0609 - 1,
@@ -1345,14 +1449,18 @@ local({
 		}) %>%
 		compact(.)
 
-	models_by_vdate %>%
+	model_coefs_plot =
+		models_by_vdate %>%
 		map(., \(x) x$coefs) %>%
 		list_rbind() %>%
 		ggplot() +
 		geom_line(aes(x = vdate, y = estimate)) +
 		facet_wrap(vars(term), scales = 'free')
 
-	models_by_vdate %>%
+	print(model_coefs_plot)
+
+	models_tps_plot =
+		models_by_vdate %>%
 		map(., \(x) x$pred) %>%
 		list_rbind() %>%
 		filter(., varname %in% c('t01m', 't03m', 't10y', 't30y')) %>%
@@ -1367,6 +1475,7 @@ local({
 		labs(title = 'Fitted term premia estimates by t', x = 'Months forward', y = 'Term premia') +
 		theme(legend.position = 'none')
 
+	print(models_tps_plot)
 
 	# Get TPS for all vdates & scale down small forecast horizons
 	tps = map(tdns$backtest_vdates, .progress = T, function(test_vdate) {
@@ -1376,17 +1485,17 @@ local({
 		model = models[[1]]$model
 
 		test =
-			dns_coefs_forecast %>%
+			tdns$dns_coefs_forecast %>%
 			filter(., vdate <= max(test_vdate)) %>%
 			filter(., vdate == max(vdate)) %>%
 			mutate(., months_ahead_start = interval(floor_date(vdate, 'months'), date) %/% months(1)) %>%
-			mutate(., sp500 = tail(filter(sp500, vdate <= test_vdate), 1)$sp500) %>%
+			mutate(., sp500 = tail(filter(sp500_obs, vdate <= test_vdate), 1)$sp500) %>%
 			left_join(
 				.,
 				ffr_forecasts %>% filter(., vdate <= test_vdate) %>% filter(., vdate == max(vdate)),
 				join_by(months_ahead_start == months_out, closest(vdate >= vdate))
 			) %>%
-			expand_grid(yield_curve_names_map) %>%
+			expand_grid(tdns$ttm_varname_map) %>%
 			mutate(
 				.,
 				logttm = ttm ^ .0609 - 1,
@@ -1423,7 +1532,8 @@ local({
 		compact() %>%
 		list_rbind()
 
-	tps %>%
+	fixed_tp_plot =
+		tps %>%
 		filter(., date == floor_date(today() - months(3), 'month') & varname == 't10y') %>%
 		ggplot() +
 		geom_line(aes(x = test_vdate, y = value, color = as.factor(model_vdate), group = model_vdate)) +
@@ -1431,42 +1541,55 @@ local({
 		guides(color=guide_legend(ncol = 2)) +
 		labs(title = 'Forecasted term premiums for Dec-23 by forecast date', x = 't', y = 'term premium', color = 'model tau')
 
+	print(fixed_tp_plot)
 	# Reconstruct 10-year forward TP & annualize it!
-	tps %>%
+	tp_10y_plot =
+		tps %>%
 		filter(., varname == 't10y') %>%
 		filter(., months_out == 60) %>%
 		ggplot() +
 		geom_line(aes(x = test_vdate, y = value))
 
-	tps %>%
+	print(tp_10y_plot)
+
+	latest_tp_plot =
+		tps %>%
 		filter(., test_vdate == max(test_vdate))  %>%
 		ggplot() +
 		geom_line(aes(x = date, y = value, color = varname)) +
 		labs(title = 'Latest term premiums (smoothed)')
 
+	print(latest_tp_plot)
+
 	# Plot TP curve forecasts
-	tps %>%
+	tp_curve_plot =
+		tps %>%
 		filter(
 			.,
 			test_vdate %in% c(sample(unique(.$test_vdate), 9), max(.$test_vdate)),
 			months_out <= 60,
 			months_out %% 12 == 0
 		) %>%
-		inner_join(., yield_curve_names_map, by = 'varname') %>%
+		inner_join(., tdns$ttm_varname_map, by = 'varname') %>%
 		ggplot() +
 		geom_line(aes(x = ttm, y = value, color = as.factor(months_out), group = months_out)) +
 		geom_point(aes(x = ttm, y = value, color = as.factor(months_out), group = months_out)) +
 		facet_wrap(vars(test_vdate))
 
+	print(tp_curve_plot)
+
 	# Plot TP forecasts over time for current period
-	tps %>%
+	tp_over_time_plot =
+		tps %>%
 		filter(., date == floor_date(today(), 'months')) %>%
 		ggplot(.) +
 		geom_line(aes(x = test_vdate, y = value, color = varname)) +
 		labs(title = 'TPs over time for current month')
 
+	print(tp_over_time_plot)
+
 	adj_forecasts =
-		expectations_forecasts %>%
+		tdns$expectations_forecasts %>%
 		rename(norf = value_norf, eh = value) %>%
 		inner_join(
 			transmute(tps, date, varname, tp_vdate = test_vdate, tp = value),
@@ -1474,18 +1597,24 @@ local({
 		) %>%
 		mutate(., value = eh + tp)
 
-	adj_forecasts %>%
+	current_forecast_plot =
+		adj_forecasts %>%
 		filter(., vdate == max(vdate)) %>%
 		ggplot(.) +
 		geom_line(aes(x = date, y = value, color = varname)) +
 		labs(title = 'Current forecast')
 
-	adj_forecasts %>%
+	print(current_forecast_plot)
+
+	current_curve_plot =
+		adj_forecasts %>%
 		filter(., vdate == max(vdate) & (date <= today() + years(5) & month(date) %in% c(1, 6))) %>%
-		left_join(., yield_curve_names_map, by = 'varname') %>%
+		left_join(., tdns$ttm_varname_map, by = 'varname') %>%
 		ggplot() +
 		geom_line(aes(x = ttm, y = value, color = as.factor(date), group = date)) +
 		labs(title = 'Current curve forecast')
+
+	print(current_curve_plot)
 
 	# adj_forecasts %>%
 	# 	filter(vdate == max(vdate) & varname %in% c('t03m', 't10y', 't30y')) %>%
@@ -1496,7 +1625,8 @@ local({
 	# 	labs(title = 'Current forecast, split by component types') +
 	# 	ggthemes::theme_fivethirtyeight()
 
-	adj_forecasts %>%
+	sampled_curve_plots =
+		adj_forecasts %>%
 		mutate(., months_ahead = interval(floor_date(vdate, 'month'), date) %/% months(1)) %>%
 		filter(
 			.,
@@ -1504,18 +1634,22 @@ local({
 			months_ahead <= 60,
 			months_ahead %in% c(0, 6, 12, 24, 48)
 		) %>%
-		left_join(yield_curve_names_map, by = 'varname') %>%
+		left_join(tdns$ttm_varname_map, by = 'varname') %>%
 		ggplot() +
 		geom_line(aes(x = ttm, y = value, color = as.factor(months_ahead), group = months_ahead)) +
 		facet_wrap(vars(vdate))
+
+	print(sampled_curve_plots)
+
+	tdns$tps <<- tps
+	tdns$adj_forecasts <<- adj_forecasts
 })
 
 
 ### 5. Combine with Historical -----------------------------------------------------------
 local({
 
-
-	### 7. Smooth with historical data
+	### Smooth with historical data
 
 	# https://en.wikipedia.org/wiki/Logistic_function
 	get_logistic_x0 = function(desired_y_intercept, k = 1) {
@@ -1532,7 +1666,7 @@ local({
 	# and the last forecast for that last_hist
 	# Use logistic smoother to reduce weight over time
 	hist_merged_df =
-		adj_forecasts %>%
+		tdns$adj_forecasts %>%
 		mutate(., months_ahead = interval(floor_date(vdate, 'months'), date) %/% months(1)) %>%
 		left_join(
 			.,
@@ -1578,25 +1712,32 @@ local({
 		)) %>%
 		arrange(., desc(vdate))
 
-	hist_merged_df %>%
+	fw_over_time_plot =
+		hist_merged_df %>%
 		filter(., vdate >= today() - days(90)) %>%
 		filter(., date == floor_date(today('US/Eastern'), 'month'), varname == 't10y') %>%
 		ggplot(.) +
 		geom_line(aes(x = vdate, y = forecast_weight, color = format(vdate, '%Y%m'))) +
 		labs(title = 'Forecast weights for this months forecast over time')
 
-	hist_merged_df %>%
+	print(fw_over_time_plot)
+
+	fw_over_fut_plot =
+		hist_merged_df %>%
 		filter(., vdate == max(vdate), varname == 't30y') %>%
 		ggplot(.) +
 		geom_line(aes(x = date, y = forecast_weight)) +
 		labs(title = 'Forecast weights generated on this vdate for future forecasts')
 
+	print(fw_over_fut_plot)
+
 	# Test plot 1
-	hist_merged_df %>%
+	test_plot_1 =
+		hist_merged_df %>%
 		filter(., vdate %in% head(unique(hist_merged_df$vdate), 10)) %>%
 		group_by(., vdate) %>%
 		filter(., date == min(date)) %>%
-		inner_join(., yield_curve_names_map, by = 'varname') %>%
+		inner_join(., tdns$ttm_varname_map, by = 'varname') %>%
 		arrange(., ttm) %>%
 		ggplot(.) +
 		geom_point(aes(x = ttm, y = final_value), alpha = .5, color = 'forestgreen') +
@@ -1608,10 +1749,13 @@ local({
 			subtitle = 'green = joined, blue = unjoined_forecast, black = hist'
 		)
 
+	print(test_plot_1)
+
 	# Test plot 2
-	hist_merged_df %>%
+	test_plot_2 =
+		hist_merged_df %>%
 		filter(., vdate == max(vdate) & date <= today() + years(1)) %>%
-		inner_join(., yield_curve_names_map, by = 'varname') %>%
+		inner_join(., tdns$ttm_varname_map, by = 'varname') %>%
 		arrange(., ttm) %>%
 		ggplot(.) +
 		geom_point(aes(x = ttm, y = final_value), alpha = .5, color = 'forestgreen') +
@@ -1623,18 +1767,21 @@ local({
 			subtitle = 'green = joined, blue = unjoined_forecast, black = hist'
 		)
 
+	print(test_plot_2)
+
 	merged_forecasts =
 		hist_merged_df %>%
 		transmute(., vdate, varname, freq = 'm', date, value = final_value)
 
 	forecasts_comparison = bind_rows(
-		expectations_forecasts %>% mutate(., value = value_norf, type = '1. EH'),
-		expectations_forecasts  %>% mutate(., type = '2. EH + RF'),
-		adj_forecasts %>% mutate(., type = '3. EH + TP'),
+		tdns$expectations_forecasts %>% mutate(., value = value_norf, type = '1. EH'),
+		tdns$expectations_forecasts  %>% mutate(., type = '2. EH + RF'),
+		tdns$adj_forecasts %>% mutate(., type = '3. EH + TP'),
 		merged_forecasts %>% mutate(., type = '4. EH + TP + Hist (Final)'),
 	)
 
-	forecasts_comparison %>%
+	subcomponent_plots =
+		forecasts_comparison %>%
 		filter(., vdate == max(vdate) - days(0)) %>%
 		ggplot(.) +
 		geom_line(aes(x = date, y = value, color = type), alpha = .5) +
@@ -1642,391 +1789,398 @@ local({
 		ggthemes::theme_igray() +
 		labs(title = 'Subcomponent forecasts at lastest vintage', color = 'Component')
 
-	# forecasts_composition = bind_rows(
-	# 	expectations_forecasts %>% mutate(., value = value - value_norf, type = 'RF'),
-	# 	expectations_forecasts  %>% mutate(., value = value_norf, type = 'EH'),
-	# 	adj_forecasts %>% mutate(., value = tp, type = 'TP'),
-	# )
-	#
-	# forecasts_composition %>%
-	# 	filter(., varname == 't10y') %>%
-	# 	mutate(., months_out = interval(floor_date(vdate, 'month'), date) %/% months(1)) %>%
-	# 	filter(., months_out == 12) %>%
-	# 	ggplot(.) +
-	# 	geom_line(aes(x = vdate, color = type, y = value)) +
-	# 	ggthemes::theme_igray() +
-	# 	labs(title = '12-month ahead forecast of the 10-year Treasury yield', x = 't', y = 'y', color = 'Component')
+	print(subcomponent_plots)
 
-	# forecasts_composition %>%
-	# 	filter(., varname == 't10y' & vdate %in% c(sample(.$vdate, size = 10), max(.$vdate))) %>%
-	# 	mutate(., months_out = interval(floor_date(vdate, 'month'), date) %/% months(1)) %>%
-	# 	ggplot(.) +
-	# 	geom_area(aes(x = months_out, y = value, fill = type), alpha = .5) +
-	# 	ggthemes::theme_igray() +
-	# 	facet_wrap(vars(vdate)) +
-	# 	labs(title = 'Subcomponent forecasts at lastest vintage', color = 'Component')
+	if (F) {
+		forecasts_composition = bind_rows(
+			tdns$expectations_forecasts %>% mutate(., value = value - value_norf, type = 'RF'),
+			tdns$expectations_forecasts  %>% mutate(., value = value_norf, type = 'EH'),
+			tdns$adj_forecasts %>% mutate(., value = tp, type = 'TP'),
+		)
 
-	# forecasts_comparison %>%
-	# 	filter(., vdate %in% sample(merged_forecasts$vdate, size = 5) & type != '1. EH') %>%
-	# 	mutate(., months_ahead = interval(floor_date(vdate, 'month'), floor_date(date, 'month')) %/% months(1)) %>%
-	# 	filter(., months_ahead %in% c(0, 12, 60)) %>%
-	# 	left_join(., yield_curve_names_map, by = 'varname') %>%
-	# 	ggplot() +
-	# 	geom_line(aes(x = ttm, y = value, color = as.factor(months_ahead), group = months_ahead)) +
-	# 	facet_grid(rows = vars(vdate), cols = vars(type)) +
-	# 	ggthemes::theme_fivethirtyeight() +
-	# 	labs(title = 'Subcomponent curve forecasts by vdate', color = 'Months ahead')
-	#
-	# # Take same-month t01m forecasts and merge with last historical period
-	# # at the short end during financial risk periods
-	# # Weight of last period is .5 at start of month and decreases to 0 at end of month
-	# final_forecasts =
-	# 	filter(merged_forecasts, floor_date(vdate, 'month') == date & varname == 't01m') %>%
-	# 	left_join(
-	# 		hist_df_unagg %>%
-	# 			group_by(., vdate, varname) %>%
-	# 			filter(., date == max(date)) %>%
-	# 			ungroup(.) %>%
-	# 			transmute(., vdate, varname, last_date = date, last_value = value),
-	# 		by = c('varname', 'vdate'),
-	# 		relationship = 'one-to-one'
-	# 	) %>%
-	# 	mutate(., hist_weight = .5 - .5/30 * ifelse(day(vdate) >= 30, 30, day(vdate))) %>%
-	# 	mutate(., weighted_value = hist_weight * last_value + (1 - hist_weight) * value) %>%
-	# 	transmute(
-	# 		.,
-	# 		vdate,
-	# 		varname,
-	# 		freq,
-	# 		date,
-	# 		value = weighted_value
-	# 	) %>%
-	# 	arrange(., vdate) %>%
-	# 	{bind_rows(., anti_join(merged_forecasts, ., by = c('vdate', 'varname', 'freq', 'date')))}
-	#
-	# final_forecasts %>%
-	# 	filter(., vdate %in% sample(final_forecasts$vdate, size = 10)) %>%
-	# 	mutate(., months_ahead = interval(floor_date(vdate, 'month'), floor_date(date, 'month')) %/% months(1)) %>%
-	# 	filter(., months_ahead %in% c(0, 12, 60)) %>%
-	# 	left_join(., yield_curve_names_map, by = 'varname') %>%
-	# 	ggplot() +
-	# 	geom_line(aes(x = ttm, y = value, color = as.factor(months_ahead), group = months_ahead)) +
-	# 	facet_wrap(vars(vdate))
-	#
-	# ### Performance testing
-	# ets_forecasts = list_rbind(map(unique(model_forecasts$vdate), .progress = T, \(this_vdate) {
-	# 	hist$treasury %>%
-	# 		filter(., varname == 't10y' & date < this_vdate) %>%
-	# 		tail(., 90) %>%
-	# 		bind_rows(
-	# 			tibble(date = seq(
-	# 				from = floor_date(max(.$date), 'month')  %m+% months(1),
-	# 				to = floor_date(this_vdate, 'quarter') + years(4),
-	# 				by = '1 month'
-	# 			))
-	# 		) %>%
-	# 		mutate(., value = zoo::na.locf(value)) %>%
-	# 		mutate(., date = floor_date(date, 'quarter')) %>%
-	# 		summarize(., value = mean(value), .by = 'date') %>%
-	# 		filter(., date >= floor_date(as_date(this_vdate), 'quarter')) %>%
-	# 		bind_cols(vdate = this_vdate, type = 'ets', .)
-	# }))
-	#
-	# fut_forecasts = list_rbind(map(unique(model_forecasts$vdate), .progress = T, \(this_vdate) {
-	#
-	# 	last_treas = tail(filter(hist$treasury, varname == 't10y' & date < this_vdate), 1)$value
-	# 	last_ffr = tail(filter(hist$fred, varname == 'ffr' & date < this_vdate), 1)$value
-	# 	last_spread = last_treas - last_ffr
-	#
-	# 	forecasts_out =
-	# 		adj_forecasts %>%
-	# 		filter(., varname == 't10y' & vdate == this_vdate) %>%
-	# 		mutate(., value = eh - norf) %>%
-	# 		select(., vdate, date, value) %>%
-	# 		mutate(., value = value + last_spread)
-	#
-	# 	hist$treasury %>%
-	# 		filter(., varname == 't10y' & date < forecasts_out$date[[1]]) %>%
-	# 		bind_rows(., forecasts_out) %>%
-	# 		mutate(., date = floor_date(date, 'quarter')) %>%
-	# 		summarize(., value = mean(value), .by = 'date') %>%
-	# 		filter(., date >= floor_date(as_date(this_vdate), 'quarter')) %>%
-	# 		bind_cols(vdate = this_vdate, type = 'fut', .)
-	# }))
-	#
-	# # Get model forecasts at quarterly intervals
-	# model_forecasts =
-	# 	final_forecasts %>%
-	# 	filter(., varname == 't10y') %>%
-	# 	group_split(., vdate) %>%
-	# 	# Aggregate to quarterly - may need historical data joined in
-	# 	map(., .progress = T, function(df) {
-	# 		# Get previous data - assume t10y vintage date lag of 1 day
-	# 		bind_rows(
-	# 			hist$treasury %>%
-	# 				filter(., varname == 't10y' & date < df$vdate[[1]]) %>%
-	# 				mutate(., date = floor_date(date, 'month')) %>%
-	# 				summarize(., value = mean(value), .by = c(date)) %>%
-	# 				filter(., date < df$date[[1]]),
-	# 			df
-	# 			) %>%
-	# 			mutate(., date = floor_date(date, 'quarter')) %>%
-	# 			summarize(., value = mean(value), .by = date) %>%
-	# 			filter(., date >= floor_date(df$vdate[[1]], 'quarter')) %>%
-	# 			mutate(., vdate = df$vdate[[1]]) %>%
-	# 			mutate(., type = 'model')
-	# 	}) %>%
-	# 	list_rbind()
+		forecasts_composition %>%
+			filter(., varname == 't10y') %>%
+			mutate(., months_out = interval(floor_date(vdate, 'month'), date) %/% months(1)) %>%
+			filter(., months_out == 12) %>%
+			ggplot(.) +
+			geom_line(aes(x = vdate, color = type, y = value)) +
+			ggthemes::theme_igray() +
+			labs(title = '12-month ahead forecast of the 10-year Treasury yield', x = 't', y = 'y', color = 'Component')
 
-	# # Test No_TP model
-	# model_forecasts_2 =
-	# 	adj_forecasts %>%
-	# 	mutate(., value = value - tp) %>%
-	# 	filter(., varname == 't10y') %>%
-	# 	group_split(., vdate) %>%
-	# 	# Aggregate to quarterly - may need historical data joined in
-	# 	map(., .progress = T, function(df) {
-	# 		# Get previous data - assume t10y vintage date lag of 1 day
-	# 		bind_rows(
-	# 			hist$treasury %>%
-	# 				filter(., varname == 't10y' & date < df$vdate[[1]]) %>%
-	# 				mutate(., date = floor_date(date, 'month')) %>%
-	# 				summarize(., value = mean(value), .by = c(date)) %>%
-	# 				filter(., date < df$date[[1]]),
-	# 			df
-	# 		) %>%
-	# 			mutate(., date = floor_date(date, 'quarter')) %>%
-	# 			summarize(., value = mean(value), .by = date) %>%
-	# 			filter(., date >= floor_date(df$vdate[[1]], 'quarter')) %>%
-	# 			mutate(., vdate = df$vdate[[1]]) %>%
-	# 			mutate(., type = 'model_2')
-	# 	}) %>%
-	# list_rbind()
+		forecasts_composition %>%
+			filter(., varname == 't10y' & vdate %in% c(sample(.$vdate, size = 10), max(.$vdate))) %>%
+			mutate(., months_out = interval(floor_date(vdate, 'month'), date) %/% months(1)) %>%
+			ggplot(.) +
+			geom_area(aes(x = months_out, y = value, fill = type), alpha = .5) +
+			ggthemes::theme_igray() +
+			facet_wrap(vars(vdate)) +
+			labs(title = 'Subcomponent forecasts at lastest vintage', color = 'Component')
 
-	# perf_df_0 = bind_rows(
-	# 	ets_forecasts,
-	# 	model_forecasts,
-	# 	fut_forecasts,
-	# 	get_query(pg, sql(
-	# 		"SELECT vdate, date, d1 AS value
-	# 			FROM forecast_values_v2_all
-	# 			WHERE forecast = 'spf' AND varname IN ('t10y')"
-	# 		)) %>%
-	# 		mutate(., vdate) %>%
-	# 		filter(., date >= floor_date(vdate, 'quarter')) %>%
-	# 		mutate(., type = 'spf'),
-	# 	get_query(pg, sql(
-	# 		"SELECT vdate, date, d1 AS value
-	# 			FROM forecast_values_v2_all
-	# 			WHERE forecast = 'fnma' AND varname IN ('t10y')"
-	# 		)) %>%
-	# 		mutate(., vdate = floor_date(vdate, 'month')) %>%
-	# 		filter(., date >= floor_date(vdate, 'quarter')) %>%
-	# 		mutate(., type = 'fnma')
-	# ) %>%
-	# 	filter(., vdate >= '2014-01-01')
-	#
-	# perf_df =
-	# 	expand_grid(vdate = unique(perf_df_0$vdate), type = unique(perf_df_0$type)) %>%
-	# 	left_join(., rename(perf_df_0, release_vdate = vdate), join_by(type, closest(vdate >= release_vdate))) %>%
-	# 	inner_join(
-	# 		.,
-	# 		hist$treasury %>%
-	# 			filter(., varname == 't10y') %>%
-	# 			mutate(., date = floor_date(date, 'quarter')) %>%
-	# 			summarize(., hist = mean(value), .by = date),
-	# 		by = 'date'
-	# 	) %>%
-	# 	mutate(
-	# 		.,
-	# 		weeks_out = ceiling(interval(vdate, floor_date(date, 'quarter')) / days(7)),
-	# 		data_lag = interval(release_vdate, vdate) %/% days(1)
-	# 		) %>%
-	# 	filter(., year(vdate) >= 2016)
-	#
-	# perf_df %>%
-	# 	filter(., year(vdate) >= 2017 & weeks_out <= 52) %>%
-	# 	mutate(., error = 100 * (value - hist)) %>%
-	# 	arrange(., vdate, date) %>%
-	# 	group_by(., type) %>%
-	# 	mutate(., type = case_when(
-	# 		type == 'fnma' ~ 'Blue Chip',
-	# 		type == 'spf' ~ 'SPF',
-	# 		type == 'ets' ~ 'ETS',
-	# 		type == 'fut' ~ 'Futures-Derived',
-	# 		type == 'model' ~ 'Model'
-	# 	)) %>%
-	# 	summarize(
-	# 		.,
-	# 		'Average Data Delay in Days' = mean(data_lag),
-	# 		'MAE (bps)' = (mean(abs(error))),
-	# 		'MAPE (bps)' = mean(abs(error)/hist),
-	# 		'20th Error Quantile (bps)' = quantile((abs(error)), .2),
-	# 		'80th Error Quantile (bps)' = quantile((abs(error)), .8),
-	# 		.groups = 'drop'
-	# 	) %>%
-	# 	xtable::xtable(., digits = c(0, 0, 0, 2, 2, 2, 2)) %>%
-	# 	print(., include.rownames = F)
-	#
-	# perf_df %>%
-	# 	filter(., year(vdate) >= 2017) %>%
-	# 	mutate(., error = value - hist) %>%
-	# 	arrange(., vdate, date) %>%
-	# 	group_by(., type, weeks_out) %>%
-	# 	summarize(., lag = median(data_lag), mae = mean(abs(error)), n = n(), .groups = 'drop') %>%
-	# 	filter(., n >= 4 & weeks_out %in% c(1:4, 6, 12, 24, 36, 48, 60) & weeks_out >= 0) %>%
-	# 	mutate(
-	# 		.,
-	# 		lag = as.character(lag),
-	# 		across(c(mae), \(x) ifelse(x == min(x), paste0('\\textbf{', round(x, 3),'}'), round(x, 3))),
-	# 		.by = 'weeks_out'
-	# 	) %>%
-	# 	pivot_wider(., id_cols = weeks_out, names_from = c(type), values_from = c(lag, mae)) %>%
-	# 	select(
-	# 		.,
-	# 		weeks_out,
-	# 		lag_fnma, mae_fnma,
-	# 		lag_spf, mae_spf,
-	# 		lag_ets, mae_ets,
-	# 		lag_fut, mae_fut,
-	# 		lag_model, mae_model,
-	# 		) %>%
-	# 	arrange(., weeks_out) %>%
-	# 	xtable::xtable(., digits = c(0, 0, rep(c(0, 4), 5))) %>%
-	# 	print(., include.rownames = F, include.colnames = F, hline.after = NULL, sanitize.text.function=\(x) x)
-	#
-	# perf_df %>%
-	# 	filter(., year(vdate) >= 2017) %>%
-	# 	mutate(., error = 100 * (value - hist)) %>%
-	# 	arrange(., vdate, date) %>%
-	# 	group_by(., type, weeks_out) %>%
-	# 	summarize(., mae = (mean(abs(error))), n = n(), .groups = 'drop') %>%
-	# 	filter(., n >= 4 & weeks_out <= 52 * 1 & weeks_out >= 1) %>%
-	# 	ggplot() +
-	# 	geom_line(aes(x = weeks_out, y = mae, color = type, group = type)) +
-	# 	geom_point(aes(x = weeks_out, y = mae, color = type, group = type), size = .5) +
-	# 	scale_color_manual(
-	# 		labels = c(fnma = 'Blue Chip', fut = 'Futures-Derived', spf = 'Survey of Professional Forecasters', ets = 'Naive ETS', model = 'Model'),
-	# 		values = c(fnma = 'turquoise', fut = 'slategray', spf = 'firebrick', ets = 'violet', model = 'gold'),
-	# 	) +
-	# 	scale_x_reverse() +
-	# 	ggthemes::theme_igray() +
-	# 	labs(x = 'Weeks before forecasted quarter begins', y = 'MAE in basis points', color = 'Forecast', fill = 'Forecast')
-	#
-	# quantiles =
-	# 	vix %>%
-	# 	group_by(., date = floor_date(date, 'quarter')) %>%
-	# 	summarize(., vix = mean(value)) %>%
-	# 	mutate(., quantile = ntile(vix, 4))
-	#
-	# perf_df %>%
-	# 	inner_join(., quantiles, by = 'date') %>%
-	# 	filter(., year(vdate) >= 2014 & weeks_out <= 52) %>%
-	# 	mutate(., error = 100 * (value - hist)) %>%
-	# 	arrange(., vdate, date) %>%
-	# 	group_by(., type, quantile) %>%
-	# 	mutate(., type = case_when(
-	# 		type == 'fnma' ~ 'Blue Chip',
-	# 		type == 'spf' ~ 'SPF',
-	# 		type == 'ets' ~ 'ETS',
-	# 		type == 'fut' ~ 'Futures-Derived',
-	# 		type == 'model' ~ 'Model'
-	# 	)) %>%
-	# 	summarize(., mae = mean(abs(error)), .groups = 'drop') %>%
-	# 	pivot_wider(., id_cols = c(type), names_from = quantile, values_from = mae)
+		forecasts_comparison %>%
+			filter(., vdate %in% sample(merged_forecasts$vdate, size = 5) & type != '1. EH') %>%
+			mutate(., months_ahead = interval(floor_date(vdate, 'month'), floor_date(date, 'month')) %/% months(1)) %>%
+			filter(., months_ahead %in% c(0, 12, 60)) %>%
+			left_join(., tdns$ttm_varname_map, by = 'varname') %>%
+			ggplot() +
+			geom_line(aes(x = ttm, y = value, color = as.factor(months_ahead), group = months_ahead)) +
+			facet_grid(rows = vars(vdate), cols = vars(type)) +
+			ggthemes::theme_fivethirtyeight() +
+			labs(title = 'Subcomponent curve forecasts by vdate', color = 'Months ahead')
+	}
 
-	# vix %>%
-	# 	group_by(., date = floor_date(date, 'quarter')) %>%
-	# 	summarize(., vix = mean(value))
-	# ets_forecasts_d = list_rbind(map(unique(model_forecasts$vdate), .progress = T, \(this_vdate) {
-	# 	hist$treasury %>%
-	# 		filter(., varname == 't10y' & date < this_vdate) %>%
-	# 		tail(., 31) %>%
-	# 		bind_rows(
-	# 			tibble(date = seq(
-	# 				from = floor_date(max(.$date), 'month')  %m+% months(1),
-	# 				to = floor_date(this_vdate, 'month') + years(2),
-	# 				by = '1 month'
-	# 			))
-	# 		) %>%
-	# 		mutate(., value = zoo::na.locf(value)) %>%
-	# 		mutate(., date = floor_date(date, 'month')) %>%
-	# 		summarize(., value = mean(value), .by = 'date') %>%
-	# 		filter(., date >= floor_date(as_date(this_vdate), 'month')) %>%
-	# 		bind_cols(vdate = this_vdate, type = 'ets', .)
-	# }))
-	#
-	# fut_forecasts_d = list_rbind(map(unique(model_forecasts$vdate), .progress = T, \(this_vdate) {
-	#
-	# 	last_treas = tail(filter(hist$treasury, varname == 't10y' & date < this_vdate), 1)$value
-	# 	last_ffr = tail(filter(hist$fred, varname == 'ffr' & date < this_vdate), 1)$value
-	# 	last_spread = last_treas - last_ffr
-	#
-	# 	forecasts_out =
-	# 		adj_forecasts %>%
-	# 		filter(., varname == 't10y' & vdate == this_vdate) %>%
-	# 		mutate(., value = eh - norf) %>%
-	# 		select(., vdate, date, value) %>%
-	# 		mutate(., value = value + last_spread)
-	#
-	# 	hist$treasury %>%
-	# 		filter(., varname == 't10y' & date < forecasts_out$date[[1]]) %>%
-	# 		bind_rows(., forecasts_out) %>%
-	# 		mutate(., date = floor_date(date, 'month')) %>%
-	# 		summarize(., value = mean(value), .by = 'date') %>%
-	# 		filter(., date >= floor_date(as_date(this_vdate), 'month')) %>%
-	# 		bind_cols(vdate = this_vdate, type = 'fut', .)
-	# }))
-	#
-	# # Get model forecasts at quarterly intervals
-	# model_forecasts_d =
-	# 	final_forecasts %>%
-	# 	filter(., varname == 't10y') %>%
-	# 	filter(., date >= floor_date(vdate, 'month')) %>%
-	# 	mutate(., type = 'model')
-	# 	list_rbind()
-	#
-	# perf_df_d = bind_rows(ets_forecasts_d, fut_forecasts_d, model_forecasts_d)
-	#
-	# perf_df =
-	# 	expand_grid(vdate = unique(perf_df_d$vdate), type = unique(perf_df_d$type)) %>%
-	# 	left_join(., rename(perf_df_d, release_vdate = vdate), join_by(type, closest(vdate >= release_vdate))) %>%
-	# 	inner_join(
-	# 		.,
-	# 		hist$treasury %>%
-	# 		   	filter(., varname == 't10y') %>%
-	# 		   	mutate(., date = floor_date(date, 'month')) %>%
-	# 		   	summarize(., hist = mean(value), .by = date),
-	# 		by = 'date'
-	# 		) %>%
-	# 	mutate(
-	# 		.,
-	# 		days_out = interval(vdate, ceiling_date(date, 'month')) %/% days(7),
-	# 		data_lag = interval(release_vdate, vdate) %/% days(1)
-	# 	)
-	# perf_df %>%
-	# 	filter(., year(vdate) >= 2016) %>%
-	# 	mutate(., error = value - hist) %>%
-	# 	arrange(., vdate, date) %>%
-	# 	group_by(., type, days_out) %>%
-	# 	summarize(
-	# 		.,
-	# 		average_data_delay = mean(data_lag),
-	# 		mae = (mean(abs(error))),
-	# 		q80e = quantile((abs(error)), .8),
-	# 		q20e = quantile((abs(error)), .2),
-	# 		n = n(),
-	# 		.groups = 'drop'
-	# 	) %>%
-	# 	filter(., days_out <= 360) %>%
-	# 	ggplot() +
-	# 	geom_line(aes(x = days_out, y = mae, color = type, group = type)) +
-	# 	geom_point(aes(x = days_out, y = mae, color = type, group = type), size = .5) +
-	# 	scale_x_reverse() +
-	# 	ggthemes::theme_igray() +
-	# 	labs(x = 'Weeks until forecast value is realized', y = 'Log MAE', color = 'Forecast', fill = 'Forecast')
+	# Take same-month t01m forecasts and merge with last historical period
+	# at the short end during financial risk periods
+	# Weight of last period is .5 at start of month and decreases to 0 at end of month
+	final_forecasts =
+		filter(merged_forecasts, floor_date(vdate, 'month') == date & varname == 't01m') %>%
+		left_join(
+			tibble(vdate = tdns$backtest_vdates) %>%
+				# !! Only pulls dates that are strictly less than the vdate (1 day EFFR delay in FRED)
+				left_join(., tdns$treas_d_obs, join_by(closest(vdate > date))) %>%
+				transmute(., vdate, varname, last_date = date, last_value = value),
+			by = c('varname', 'vdate'),
+			relationship = 'one-to-one'
+		) %>%
+		mutate(., hist_weight = .5 - .5/30 * ifelse(day(vdate) >= 30, 30, day(vdate))) %>%
+		mutate(., weighted_value = hist_weight * last_value + (1 - hist_weight) * value) %>%
+		transmute(
+			.,
+			vdate,
+			varname,
+			freq,
+			date,
+			value = weighted_value
+		) %>%
+		arrange(., vdate) %>%
+		{bind_rows(., anti_join(merged_forecasts, ., by = c('vdate', 'varname', 'freq', 'date')))}
 
+	final_forecast_plots =
+		final_forecasts %>%
+		filter(., vdate %in% sample(final_forecasts$vdate, size = 10)) %>%
+		mutate(., months_ahead = interval(floor_date(vdate, 'month'), floor_date(date, 'month')) %/% months(1)) %>%
+		filter(., months_ahead %in% c(0, 12, 60)) %>%
+		left_join(., tdns$ttm_varname_map, by = 'varname') %>%
+		ggplot() +
+		geom_line(aes(x = ttm, y = value, color = as.factor(months_ahead), group = months_ahead)) +
+		facet_wrap(vars(vdate))
 
+	print(final_forecast_plots)
+
+	### Performance testing
+	if (F) {
+
+		ets_forecasts = list_rbind(map(unique(model_forecasts$vdate), .progress = T, \(this_vdate) {
+			hist$treasury %>%
+				filter(., varname == 't10y' & date < this_vdate) %>%
+				tail(., 90) %>%
+				bind_rows(
+					tibble(date = seq(
+						from = floor_date(max(.$date), 'month')  %m+% months(1),
+						to = floor_date(this_vdate, 'quarter') + years(4),
+						by = '1 month'
+					))
+				) %>%
+				mutate(., value = zoo::na.locf(value)) %>%
+				mutate(., date = floor_date(date, 'quarter')) %>%
+				summarize(., value = mean(value), .by = 'date') %>%
+				filter(., date >= floor_date(as_date(this_vdate), 'quarter')) %>%
+				bind_cols(vdate = this_vdate, type = 'ets', .)
+		}))
+
+		fut_forecasts = list_rbind(map(unique(model_forecasts$vdate), .progress = T, \(this_vdate) {
+
+			last_treas = tail(filter(hist$treasury, varname == 't10y' & date < this_vdate), 1)$value
+			last_ffr = tail(filter(hist$fred, varname == 'ffr' & date < this_vdate), 1)$value
+			last_spread = last_treas - last_ffr
+
+			forecasts_out =
+				tdns$adj_forecasts %>%
+				filter(., varname == 't10y' & vdate == this_vdate) %>%
+				mutate(., value = eh - norf) %>%
+				select(., vdate, date, value) %>%
+				mutate(., value = value + last_spread)
+
+			hist$treasury %>%
+				filter(., varname == 't10y' & date < forecasts_out$date[[1]]) %>%
+				bind_rows(., forecasts_out) %>%
+				mutate(., date = floor_date(date, 'quarter')) %>%
+				summarize(., value = mean(value), .by = 'date') %>%
+				filter(., date >= floor_date(as_date(this_vdate), 'quarter')) %>%
+				bind_cols(vdate = this_vdate, type = 'fut', .)
+		}))
+
+		# Get model forecasts at quarterly intervals
+		model_forecasts =
+			final_forecasts %>%
+			filter(., varname == 't10y') %>%
+			group_split(., vdate) %>%
+			# Aggregate to quarterly - may need historical data joined in
+			map(., .progress = T, function(df) {
+				# Get previous data - assume t10y vintage date lag of 1 day
+				bind_rows(
+					hist$treasury %>%
+						filter(., varname == 't10y' & date < df$vdate[[1]]) %>%
+						mutate(., date = floor_date(date, 'month')) %>%
+						summarize(., value = mean(value), .by = c(date)) %>%
+						filter(., date < df$date[[1]]),
+					df
+					) %>%
+					mutate(., date = floor_date(date, 'quarter')) %>%
+					summarize(., value = mean(value), .by = date) %>%
+					filter(., date >= floor_date(df$vdate[[1]], 'quarter')) %>%
+					mutate(., vdate = df$vdate[[1]]) %>%
+					mutate(., type = 'model')
+			}) %>%
+			list_rbind()
+
+		# Test No_TP model
+		model_forecasts_2 =
+			tdns$adj_forecasts %>%
+			mutate(., value = value - tp) %>%
+			filter(., varname == 't10y') %>%
+			group_split(., vdate) %>%
+			# Aggregate to quarterly - may need historical data joined in
+			map(., .progress = T, function(df) {
+				# Get previous data - assume t10y vintage date lag of 1 day
+				bind_rows(
+					hist$treasury %>%
+						filter(., varname == 't10y' & date < df$vdate[[1]]) %>%
+						mutate(., date = floor_date(date, 'month')) %>%
+						summarize(., value = mean(value), .by = c(date)) %>%
+						filter(., date < df$date[[1]]),
+					df
+				) %>%
+					mutate(., date = floor_date(date, 'quarter')) %>%
+					summarize(., value = mean(value), .by = date) %>%
+					filter(., date >= floor_date(df$vdate[[1]], 'quarter')) %>%
+					mutate(., vdate = df$vdate[[1]]) %>%
+					mutate(., type = 'model_2')
+			}) %>%
+		list_rbind()
+
+		perf_df_0 = bind_rows(
+			ets_forecasts,
+			model_forecasts,
+			fut_forecasts,
+			get_query(pg, sql(
+				"SELECT vdate, date, d1 AS value
+					FROM forecast_values_v2_all
+					WHERE forecast = 'spf' AND varname IN ('t10y')"
+				)) %>%
+				mutate(., vdate) %>%
+				filter(., date >= floor_date(vdate, 'quarter')) %>%
+				mutate(., type = 'spf'),
+			get_query(pg, sql(
+				"SELECT vdate, date, d1 AS value
+					FROM forecast_values_v2_all
+					WHERE forecast = 'fnma' AND varname IN ('t10y')"
+				)) %>%
+				mutate(., vdate = floor_date(vdate, 'month')) %>%
+				filter(., date >= floor_date(vdate, 'quarter')) %>%
+				mutate(., type = 'fnma')
+		) %>%
+			filter(., vdate >= '2014-01-01')
+
+		perf_df =
+			expand_grid(vdate = unique(perf_df_0$vdate), type = unique(perf_df_0$type)) %>%
+			left_join(., rename(perf_df_0, release_vdate = vdate), join_by(type, closest(vdate >= release_vdate))) %>%
+			inner_join(
+				.,
+				hist$treasury %>%
+					filter(., varname == 't10y') %>%
+					mutate(., date = floor_date(date, 'quarter')) %>%
+					summarize(., hist = mean(value), .by = date),
+				by = 'date'
+			) %>%
+			mutate(
+				.,
+				weeks_out = ceiling(interval(vdate, floor_date(date, 'quarter')) / days(7)),
+				data_lag = interval(release_vdate, vdate) %/% days(1)
+				) %>%
+			filter(., year(vdate) >= 2016)
+
+		perf_df %>%
+			filter(., year(vdate) >= 2017 & weeks_out <= 52) %>%
+			mutate(., error = 100 * (value - hist)) %>%
+			arrange(., vdate, date) %>%
+			group_by(., type) %>%
+			mutate(., type = case_when(
+				type == 'fnma' ~ 'Blue Chip',
+				type == 'spf' ~ 'SPF',
+				type == 'ets' ~ 'ETS',
+				type == 'fut' ~ 'Futures-Derived',
+				type == 'model' ~ 'Model'
+			)) %>%
+			summarize(
+				.,
+				'Average Data Delay in Days' = mean(data_lag),
+				'MAE (bps)' = (mean(abs(error))),
+				'MAPE (bps)' = mean(abs(error)/hist),
+				'20th Error Quantile (bps)' = quantile((abs(error)), .2),
+				'80th Error Quantile (bps)' = quantile((abs(error)), .8),
+				.groups = 'drop'
+			) %>%
+			xtable::xtable(., digits = c(0, 0, 0, 2, 2, 2, 2)) %>%
+			print(., include.rownames = F)
+
+		perf_df %>%
+			filter(., year(vdate) >= 2017) %>%
+			mutate(., error = value - hist) %>%
+			arrange(., vdate, date) %>%
+			group_by(., type, weeks_out) %>%
+			summarize(., lag = median(data_lag), mae = mean(abs(error)), n = n(), .groups = 'drop') %>%
+			filter(., n >= 4 & weeks_out %in% c(1:4, 6, 12, 24, 36, 48, 60) & weeks_out >= 0) %>%
+			mutate(
+				.,
+				lag = as.character(lag),
+				across(c(mae), \(x) ifelse(x == min(x), paste0('\\textbf{', round(x, 3),'}'), round(x, 3))),
+				.by = 'weeks_out'
+			) %>%
+			pivot_wider(., id_cols = weeks_out, names_from = c(type), values_from = c(lag, mae)) %>%
+			select(
+				.,
+				weeks_out,
+				lag_fnma, mae_fnma,
+				lag_spf, mae_spf,
+				lag_ets, mae_ets,
+				lag_fut, mae_fut,
+				lag_model, mae_model,
+				) %>%
+			arrange(., weeks_out) %>%
+			xtable::xtable(., digits = c(0, 0, rep(c(0, 4), 5))) %>%
+			print(., include.rownames = F, include.colnames = F, hline.after = NULL, sanitize.text.function=\(x) x)
+
+		perf_df %>%
+			filter(., year(vdate) >= 2017) %>%
+			mutate(., error = 100 * (value - hist)) %>%
+			arrange(., vdate, date) %>%
+			group_by(., type, weeks_out) %>%
+			summarize(., mae = (mean(abs(error))), n = n(), .groups = 'drop') %>%
+			filter(., n >= 4 & weeks_out <= 52 * 1 & weeks_out >= 1) %>%
+			ggplot() +
+			geom_line(aes(x = weeks_out, y = mae, color = type, group = type)) +
+			geom_point(aes(x = weeks_out, y = mae, color = type, group = type), size = .5) +
+			scale_color_manual(
+				labels = c(fnma = 'Blue Chip', fut = 'Futures-Derived', spf = 'Survey of Professional Forecasters', ets = 'Naive ETS', model = 'Model'),
+				values = c(fnma = 'turquoise', fut = 'slategray', spf = 'firebrick', ets = 'violet', model = 'gold'),
+			) +
+			scale_x_reverse() +
+			ggthemes::theme_igray() +
+			labs(x = 'Weeks before forecasted quarter begins', y = 'MAE in basis points', color = 'Forecast', fill = 'Forecast')
+
+		quantiles =
+			vix %>%
+			group_by(., date = floor_date(date, 'quarter')) %>%
+			summarize(., vix = mean(value)) %>%
+			mutate(., quantile = ntile(vix, 4))
+
+		perf_df %>%
+			inner_join(., quantiles, by = 'date') %>%
+			filter(., year(vdate) >= 2014 & weeks_out <= 52) %>%
+			mutate(., error = 100 * (value - hist)) %>%
+			arrange(., vdate, date) %>%
+			group_by(., type, quantile) %>%
+			mutate(., type = case_when(
+				type == 'fnma' ~ 'Blue Chip',
+				type == 'spf' ~ 'SPF',
+				type == 'ets' ~ 'ETS',
+				type == 'fut' ~ 'Futures-Derived',
+				type == 'model' ~ 'Model'
+			)) %>%
+			summarize(., mae = mean(abs(error)), .groups = 'drop') %>%
+			pivot_wider(., id_cols = c(type), names_from = quantile, values_from = mae)
+
+		ets_forecasts_d = list_rbind(map(unique(model_forecasts$vdate), .progress = T, \(this_vdate) {
+			hist$treasury %>%
+				filter(., varname == 't10y' & date < this_vdate) %>%
+				tail(., 31) %>%
+				bind_rows(
+					tibble(date = seq(
+						from = floor_date(max(.$date), 'month')  %m+% months(1),
+						to = floor_date(this_vdate, 'month') + years(2),
+						by = '1 month'
+					))
+				) %>%
+				mutate(., value = zoo::na.locf(value)) %>%
+				mutate(., date = floor_date(date, 'month')) %>%
+				summarize(., value = mean(value), .by = 'date') %>%
+				filter(., date >= floor_date(as_date(this_vdate), 'month')) %>%
+				bind_cols(vdate = this_vdate, type = 'ets', .)
+		}))
+
+		fut_forecasts_d = list_rbind(map(unique(model_forecasts$vdate), .progress = T, \(this_vdate) {
+
+			last_treas = tail(filter(hist$treasury, varname == 't10y' & date < this_vdate), 1)$value
+			last_ffr = tail(filter(hist$fred, varname == 'ffr' & date < this_vdate), 1)$value
+			last_spread = last_treas - last_ffr
+
+			forecasts_out =
+				tdns$adj_forecasts %>%
+				filter(., varname == 't10y' & vdate == this_vdate) %>%
+				mutate(., value = eh - norf) %>%
+				select(., vdate, date, value) %>%
+				mutate(., value = value + last_spread)
+
+			hist$treasury %>%
+				filter(., varname == 't10y' & date < forecasts_out$date[[1]]) %>%
+				bind_rows(., forecasts_out) %>%
+				mutate(., date = floor_date(date, 'month')) %>%
+				summarize(., value = mean(value), .by = 'date') %>%
+				filter(., date >= floor_date(as_date(this_vdate), 'month')) %>%
+				bind_cols(vdate = this_vdate, type = 'fut', .)
+		}))
+
+		# Get model forecasts at quarterly intervals
+		model_forecasts_d =
+			final_forecasts %>%
+			filter(., varname == 't10y') %>%
+			filter(., date >= floor_date(vdate, 'month')) %>%
+			mutate(., type = 'model')
+			list_rbind()
+
+		perf_df_d = bind_rows(ets_forecasts_d, fut_forecasts_d, model_forecasts_d)
+
+		perf_df =
+			expand_grid(vdate = unique(perf_df_d$vdate), type = unique(perf_df_d$type)) %>%
+			left_join(., rename(perf_df_d, release_vdate = vdate), join_by(type, closest(vdate >= release_vdate))) %>%
+			inner_join(
+				.,
+				hist$treasury %>%
+				   	filter(., varname == 't10y') %>%
+				   	mutate(., date = floor_date(date, 'month')) %>%
+				   	summarize(., hist = mean(value), .by = date),
+				by = 'date'
+				) %>%
+			mutate(
+				.,
+				days_out = interval(vdate, ceiling_date(date, 'month')) %/% days(7),
+				data_lag = interval(release_vdate, vdate) %/% days(1)
+			)
+
+		perf_df %>%
+			filter(., year(vdate) >= 2016) %>%
+			mutate(., error = value - hist) %>%
+			arrange(., vdate, date) %>%
+			group_by(., type, days_out) %>%
+			summarize(
+				.,
+				average_data_delay = mean(data_lag),
+				mae = (mean(abs(error))),
+				q80e = quantile((abs(error)), .8),
+				q20e = quantile((abs(error)), .2),
+				n = n(),
+				.groups = 'drop'
+			) %>%
+			filter(., days_out <= 360) %>%
+			ggplot() +
+			geom_line(aes(x = days_out, y = mae, color = type, group = type)) +
+			geom_point(aes(x = days_out, y = mae, color = type, group = type), size = .5) +
+			scale_x_reverse() +
+			ggthemes::theme_igray() +
+			labs(x = 'Weeks until forecast value is realized', y = 'Log MAE', color = 'Forecast', fill = 'Forecast')
+	}
+
+	tdns$final_forecasts <<- final_forecasts
 	submodels$tdns <<- final_forecasts
 })
 
@@ -2036,41 +2190,106 @@ local({
 	# AMB1
 	# AMT1 <->
 	# Get FFR spread <-> compare historical change from AMERIBOR
-	futures_df = get_query(pg, sql(
-		"SELECT vdate, expdate AS date, value
+	backtest_vdates = seq(
+		from = max(today('US/Eastern') - months(BACKTEST_MONTHS), as_date('2023-07-01')),
+		# Ameribor missing close-dates before that
+		to = today('US/Eastern'),
+		by = '1 day'
+	)
+
+	# vdate in futures table represents trade dates, not pull dates!
+	futures_df = get_query(pg, str_glue(
+		"SELECT varname, tradedate, expdate AS date, tenor, value
 		FROM interest_rate_model_futures_values
 		WHERE
-			varname IN ('ameribor')
+			scrape_source = 'cboe'
+			AND varname IN ('ameribor')
+			AND is_final IS TRUE
 			AND tenor = '30d'
-			AND scrape_source IN ('cboe')"
+			AND tradedate >= '{min_tradedate}'",
+		min_tradedate = backtest_vdates[1] - days(7)
 	))
 
+	raw_data =
+		expand_grid(vdate = backtest_vdates, varname = c('ameribor'), months_out = 0:60) %>%
+		mutate(., date = floor_date(vdate, 'month') %m+% months(months_out), min_tradedate = vdate - days(7)) %>%
+		left_join(futures_df, join_by(varname, date, closest(vdate >= tradedate), min_tradedate <= tradedate)) %>%
+		mutate(., max_months_out = max(ifelse(is.na(value), 0, months_out)), .by = c(vdate, varname)) %>%
+		filter(., max_months_out != 0) # Keep vdate x varnames with at least some non-NA values
+
+	# Backfill start-0 values with historical data if there's no forecast
+	hist_daily = filter(bind_rows(hist), freq == 'd' & varname %in% c('ameribor'))
+
+	# Get existing same-month mean values for each vdates
+	hist_by_vdate =
+		distinct(hist_daily, varname, vdate) %>%
+		mutate(., date = floor_date(vdate, 'month')) %>%
+		inner_join(
+			.,
+			transmute(hist_daily, varname, trailing_vdate = vdate, value, date = floor_date(date, 'month')),
+			join_by(date, varname, vdate >= trailing_vdate)
+		) %>%
+		group_by(., varname, vdate, date) %>%
+		summarize(., month_avg = mean(value), .groups = 'drop')
+
+	filled_data =
+		raw_data %>%
+		left_join(
+			.,
+			transmute(hist_by_vdate, varname, hist_vdate = vdate, date, months_out = 0, month_avg),
+			join_by(varname, months_out, date, closest(vdate >= hist_vdate))
+		) %>%
+		mutate(., value = ifelse(is.na(value), month_avg, value)) %>%
+		# Some are still empty, so join in last available data as well even if not in the same month
+		left_join(
+			.,
+			transmute(
+				hist_daily, varname, months_out = 0,
+				hist_d_date = date, hist_d_vdate = vdate, hist_d_value = value
+			),
+			join_by(varname, months_out, date >= hist_d_date, closest(vdate >= hist_d_vdate))
+		) %>%
+		mutate(., value = ifelse(is.na(value), hist_d_value, value)) %>%
+		select(., vdate, varname, months_out, date, value, max_months_out)
+
+	# Check if any vdate is missing data
+	filled_data %>%
+		filter(., months_out == 0 & is.na(value)) %>%
+		summarize(., missing = sum(is.na(value)), .by = 'varname')
+
 	cboe_data =
-		futures_df %>%
-		mutate(., value = ifelse(is.na(value), coalesce(value, 0), (value))) %>%
-		mutate(., ameribor = smooth.spline(1:length(value), value)$y) %>%
+		filled_data %>%
+		left_join(
+			.,
+			hist$afx %>%
+				filter(., varname == 'ameribor') %>%
+				slice_max(., date, with_ties = F, by = vdate) %>%
+				transmute(., afx_vdate = vdate, ameribor_hist = value),
+			join_by(closest(vdate >= afx_vdate))
+		) %>%
+		left_join(
+			.,
+			hist$fred %>%
+				filter(., varname == 'sofr') %>%
+				slice_max(., date, with_ties = F, by = vdate) %>%
+				transmute(., ffr_vdate = vdate, ffr_hist = value),
+			join_by(closest(vdate >= ffr_vdate))
+		) %>%
+		inner_join(
+			.,
+			submodels$cme %>% filter(., varname == 'sofr') %>% transmute(vdate, date, ffr_pred = value),
+			join_by(date, vdate)
+		) %>%
 		group_split(., vdate) %>%
-		lapply(., function(df) {
-
-			hist_df = inner_join(
-				hist$afx %>% filter(., varname == 'ameribor') %>% transmute(., vdate, date, ameribor = value),
-				hist$fred %>% filter(., varname == 'ffr') %>% transmute(., vdate, date, ffr = value),
-				by = c('vdate', 'date')
-				) %>%
-				filter(., date == max(date)) %>%
-				filter(., vdate == max(vdate))
-
-			forecast = left_join(
-				transmute(df, vdate, date, ameribor = value),
-				transmute(filter(submodels$cme, varname == 'ffr'), vdate, date, ffr = value),
-				by = c('vdate', 'date')
-				)
-
-			forecast %>%
-				mutate(., ameribor = ameribor - forecast$ameribor[[1]] + hist_df$ameribor[[1]])
+		map(., function(df) {
+			# 50% FFR + Ameribor constant spread, 50% Ameribor futures
+			df %>%
+				mutate(., value = zoo::na.locf(value)) %>%
+				mutate(., ffr_based_forecast = ameribor_hist - ffr_hist + ffr_pred) %>%
+				mutate(., value = .5 * value + .5 * ffr_based_forecast)
 		}) %>%
 		list_rbind() %>%
-		transmute(., vdate, date, value = ameribor, varname = 'ameribor')
+		transmute(., vdate, date, freq = 'm', value, varname = 'ameribor')
 
 	# Plot comparison against TDNS
 	cboe_data %>%
@@ -2083,27 +2302,7 @@ local({
 		ggplot(.) +
 		geom_line(aes(x = date, y = value, color = varname, group = varname))
 
-	ameribor_forecasts =
-		filter(cboe_data, vdate == max(vdate)) %>%
-		right_join(
-			.,
-			transmute(filter(submodels$cme, varname == 'sofr' & vdate == max(vdate)), date, sofr = value),
-			by = 'date'
-			) %>%
-		mutate(., spread = value - sofr) %>%
-		mutate(
-			.,
-			varname = 'ameribor',
-			vdate = head(vdate, 1),
-			spread = {c(
-				na.omit(.$spread),
-				forecast::forecast(Arima(.$spread, order = c(1, 1, 0)), length(.$spread[is.na(.$spread)]))$mean
-				)},
-			value = round(ifelse(!is.na(value), value, sofr + spread), 4)
-			) %>%
-		transmute(., varname, freq = 'm', vdate, date, value)
-
-	submodels$cboe <<- ameribor_forecasts
+	submodels$cboe <<- cboe_data
 })
 
 ## MORT ----------------------------------------------------------
