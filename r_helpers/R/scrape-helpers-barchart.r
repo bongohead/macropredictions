@@ -92,7 +92,7 @@ get_barchart_data = function(codes, .verbose = T) {
 			read_csv(
 				.,
 				# Verified columns are correct - compare CME official chart to barchart
-				col_names = c('contract', 'vdate', 'open', 'high', 'low', 'close', 'volume', 'oi'),
+				col_names = c('contract', 'tradedate', 'open', 'high', 'low', 'close', 'volume', 'oi'),
 				col_types = 'cDdddddd'
 			) %>%
 			mutate(., code = code)

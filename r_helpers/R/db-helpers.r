@@ -341,8 +341,8 @@ store_futures_values = function(db, df, .verbose = F) {
 	if (!inherits(db, 'PqConnection')) stop('Object "db" must be of class PgConnection')
 	if (!is.data.frame(df)) stop('Parameter "df" must be a data.frame.')
 	if (
-		length(colnames(df)) != 6 ||
-		!all(sort(colnames(df)) == sort(c('scrape_source', 'varname', 'expdate', 'tenor', 'vdate', 'value')))
+		length(colnames(df)) != 7 ||
+		!all(sort(colnames(df)) == sort(c('scrape_source', 'varname', 'expdate', 'tenor', 'tradedate', 'is_final', 'value')))
 	) {
 		stop('Incorrect columns')
 	}
@@ -355,7 +355,8 @@ store_futures_values = function(db, df, .verbose = F) {
 		db,
 		df,
 		'interest_rate_model_futures_values',
-		'ON CONFLICT (scrape_source, varname, expdate, tenor, vdate) DO UPDATE SET value=EXCLUDED.value',
+		'ON CONFLICT (scrape_source, varname, expdate, tenor, tradedate)
+		DO UPDATE SET value=EXCLUDED.value,is_final=EXCLUDED.is_final',
 		.chunk_size = 10000,
 		.verbose = .verbose
 	)
