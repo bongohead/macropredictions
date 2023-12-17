@@ -77,7 +77,7 @@ local({
 
 	fred_data = list_rbind(imap(df_to_list(filter(variable_params, hist_source == 'fred')), function(x, i) {
 
-		message(str_glue('**** Pull {i}: {x$varname}'))
+		# message(str_glue('**** Pull {i}: {x$varname}'))
 
 		res =
 			get_fred_obs_with_vintage(
@@ -87,7 +87,13 @@ local({
 				.verbose = T
 			) %>%
 			transmute(., varname = x$varname, freq = x$hist_source_freq, date, vdate = vintage_date, value) %>%
-			filter(., date >= as_date(IMPORT_DATE_START), vdate >= as_date(IMPORT_DATE_START))
+			filter(., date >= as_date(IMPORT_DATE_START), vdate >= as_date(IMPORT_DATE_START)) %>%
+			# Fix for EFFR
+			mutate(., vdate = as_date(ifelse(
+				varname == 'ffr' & vdate == '2016-03-01',
+				get_next_fed_business_day(date),
+				vdate
+				)))
 
 		message(str_glue('**** Count: {nrow(res)}'))
 		return(res)
@@ -102,24 +108,8 @@ local({
 
 	message(str_glue('*** Importing Treasury Data | {format(now(), "%H:%M")}'))
 
-	treasury_data = c(
-		'https://home.treasury.gov/system/files/276/yield-curve-rates-2001-2010.csv',
-		'https://home.treasury.gov/system/files/276/yield-curve-rates-2011-2020.csv',
-		paste0(
-			'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/',
-			2021:year(today('US/Eastern')),
-			'/all?type=daily_treasury_yield_curve&field_tdr_date_value=2023&page&_format=csv'
-			)
-		) %>%
-		map(., .progress = F, \(x) read_csv(x, col_types = 'c')) %>%
-		list_rbind %>%
-		pivot_longer(., cols = -c('Date'), names_to = 'varname', values_to = 'value') %>%
-		separate(., col = 'varname', into = c('ttm_1', 'ttm_2'), sep = ' ') %>%
-		mutate(
-			.,
-			varname = paste0('t', str_pad(ttm_1, 2, pad = '0'), ifelse(ttm_2 == 'Mo', 'm', 'y')),
-			date = mdy(Date),
-		) %>%
+	treasury_data =
+		get_treasury_yields() %>%
 		transmute(
 			.,
 			varname,
@@ -128,7 +118,6 @@ local({
 			vdate = date,
 			value
 		) %>%
-		filter(., !is.na(value)) %>%
 		filter(., varname %in% filter(variable_params, hist_source == 'treas')$varname) %>%
 		filter(., date >= as_date(IMPORT_DATE_START), vdate >= as_date(IMPORT_DATE_START))
 
@@ -142,30 +131,15 @@ local({
 
 	yahoo_data = list_rbind(map(df_to_list(filter(variable_params, hist_source == 'yahoo')), function(x) {
 
-		url = paste0(
-			'https://query1.finance.yahoo.com/v7/finance/download/', x$hist_source_key,
-			'?period1=', as.numeric(as.POSIXct(as_date(IMPORT_DATE_START))),
-			'&period2=', as.numeric(as.POSIXct(Sys.Date() + days(1))),
-			'&interval=1d',
-			'&events=history&includeAdjustedClose=true'
-			)
-
-		data.table::fread(url, showProgress = FALSE) %>%
-			.[, c('Date', 'Adj Close')]	%>%
-			set_names(., c('date', 'value')) %>%
-			as_tibble(.) %>%
-			# Bug with yahoo finance returning null for date 7/22/21 as of 7/23
-			filter(., value != 'null') %>%
-			mutate(
+		get_yahoo_data(x$hist_source_key, .obs_start = IMPORT_DATE_START) %>%
+			transmute(
 				.,
 				varname = x$varname,
 				freq = x$hist_source_freq,
 				date = as_date(date),
 				vdate = date,
 				value = as.numeric(value)
-			) %>%
-			return(.)
-
+			)
 	}))
 
 	hist$raw$yahoo <<- yahoo_data
