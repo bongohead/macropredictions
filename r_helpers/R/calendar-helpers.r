@@ -1,4 +1,3 @@
-
 #' Get the next Fed bank holidays ahead of today
 #'
 #' @description See https://www.frbservices.org/about/holiday-schedules
@@ -62,5 +61,6 @@ get_next_fed_business_day = function(days) {
 
 	tibble(days = days + days(1)) %>%
 		left_join(., bdays, join_by(closest(days <= search_date))) %>%
-		.$search_date
+		.$search_date %>%
+		as_date()
 }
