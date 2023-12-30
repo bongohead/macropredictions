@@ -1,5 +1,6 @@
 #' Get historical data for all variables in the forecast_variables table.
 #'
+#' Should run after composite inf model for accurate vintage dates
 
 # Initialize ----------------------------------------------------------
 IMPORT_DATE_START = '2007-01-01'
@@ -84,7 +85,7 @@ local({
 				list(c(x$hist_source_key, x$hist_source_freq)),
 				api_key,
 				.obs_start = IMPORT_DATE_START,
-				.verbose = T
+				.verbose = F
 			) %>%
 			transmute(., varname = x$varname, freq = x$hist_source_freq, date, vdate = vintage_date, value) %>%
 			filter(., date >= as_date(IMPORT_DATE_START), vdate >= as_date(IMPORT_DATE_START)) %>%
@@ -110,6 +111,13 @@ local({
 
 	treasury_data =
 		get_treasury_yields() %>%
+		pivot_wider(., id_cols = c(date), names_from = varname, values_from = value) %>%
+		mutate(
+			.,
+			t10yt02yspread = t10y - t02y,
+			t10yt03mspread = t10y - t03m
+		) %>%
+		pivot_longer(., cols = -date, names_to = 'varname', values_to = 'value', values_drop_na = T) %>%
 		transmute(
 			.,
 			varname,
@@ -333,7 +341,84 @@ local({
 			value
 		)
 
-	hist_calc = bind_rows(cpi_data, pcepi_data)
+	## Calculate rffr and real Treasury yields by difference the expected inflation model
+	inf_curve = get_query(pg, "SELECT vdate, ttm, value FROM composite_inflation_yield_curves")
+
+	real_yields =
+		hist$raw$treas %>%
+		filter(., freq == 'd' & varname %in% c('t03m', 't06m', 't01y', 't02y', 't05y', 't10y', 't20y', 't30y')) %>%
+		mutate(., ttm = as.numeric(str_sub(varname, 2, 3)) * ifelse(str_sub(varname, 4, 4) == 'y', 12, 1)) %>%
+		select(., varname, date, vdate, value, ttm) %>%
+		inner_join(
+			.,
+			transmute(inf_curve, ttm, inf_vdate = vdate, inf_value = value),
+			join_by(ttm, closest(vdate >= inf_vdate))
+			) %>%
+		transmute(
+			.,
+			varname = paste0('r', varname),
+			freq = 'd',
+			date,
+			vdate,
+			value = value - inf_value
+			)
+
+	real_spreads =
+		real_yields %>%
+		pivot_wider(., id_cols = c(date, vdate), names_from = varname, values_from = value) %>%
+		mutate(., rt10yrt02yspread = rt10y - rt02y) %>%
+		transmute(
+			.,
+			varname = 'rt10yrt02yspread',
+			freq = 'd',
+			date,
+			vdate,
+			value = rt10yrt02yspread
+		)
+
+	real_effr =
+		hist$raw$fred %>%
+		filter(., varname == 'ffr' & freq == 'd') %>%
+		inner_join(
+			.,
+			transmute(filter(inf_curve, ttm == 1), inf_vdate = vdate, inf_value = value),
+			join_by(closest(vdate >= inf_vdate))
+		) %>%
+		transmute(
+			.,
+			varname = 'rffr',
+			freq = 'd',
+			date,
+			vdate,
+			value = value - inf_value
+		)
+
+	## Mortgage spread
+	mortgage_spread =
+		hist$raw$fred %>%
+		filter(., varname == 'mort30y' & freq == 'w') %>%
+		mutate(., end_date = date + days(6)) %>%
+		inner_join(
+			.,
+			hist$raw$treas %>%
+				filter(., varname == 't10y') %>%
+				transmute(., t_date = date, t_vdate = vdate, t_value = value)
+				,
+			join_by(end_date >= t_date, date <= t_date, vdate >= t_vdate)
+		) %>%
+		group_by(., varname, freq, date, vdate) %>%
+		summarize(., value = mean(value - t_value), .groups = 'drop') %>%
+		transmute(
+			.,
+			varname = 'mort30yt10yspread',
+			freq,
+			date,
+			vdate,
+			value = value
+		)
+
+	hist_calc = bind_rows(cpi_data, pcepi_data, real_yields, real_spreads, real_effr, mortgage_spread)
+
 
 	hist$raw$calc <<- hist_calc
 })
