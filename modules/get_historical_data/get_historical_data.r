@@ -91,7 +91,7 @@ local({
 			filter(., date >= as_date(IMPORT_DATE_START), vdate >= as_date(IMPORT_DATE_START)) %>%
 			# Fix for EFFR
 			mutate(., vdate = as_date(ifelse(
-				varname == 'ffr' & vdate == '2016-03-01',
+				varname == 'ffr' & vdate <= '2016-03-01',
 				get_next_fed_business_day(date),
 				vdate
 				)))
@@ -342,7 +342,14 @@ local({
 		)
 
 	## Calculate rffr and real Treasury yields by difference the expected inflation model
-	inf_curve = get_query(pg, "SELECT vdate, ttm, value FROM composite_inflation_yield_curves")
+	inf_curve = get_query(
+		pg,
+		"(SELECT vdate, ttm, value FROM composite_inflation_yield_curves WHERE curve_source = 'tips_spread')
+		UNION ALL
+		(SELECT vdate, ttm, value FROM composite_inflation_yield_curves
+		WHERE curve_source = 'tips_spread_smoothed'
+		AND ttm NOT IN (SELECT DISTINCT ttm FROM composite_inflation_yield_curves WHERE curve_source = 'tips_spread'))"
+		)
 
 	real_yields =
 		hist$raw$treas %>%
@@ -354,6 +361,7 @@ local({
 			transmute(inf_curve, ttm, inf_vdate = vdate, inf_value = value),
 			join_by(ttm, closest(vdate >= inf_vdate))
 			) %>%
+		na.omit() %>%
 		transmute(
 			.,
 			varname = paste0('r', varname),
@@ -367,6 +375,7 @@ local({
 		real_yields %>%
 		pivot_wider(., id_cols = c(date, vdate), names_from = varname, values_from = value) %>%
 		mutate(., rt10yrt02yspread = rt10y - rt02y) %>%
+		na.omit() %>%
 		transmute(
 			.,
 			varname = 'rt10yrt02yspread',
@@ -384,6 +393,7 @@ local({
 			transmute(filter(inf_curve, ttm == 1), inf_vdate = vdate, inf_value = value),
 			join_by(closest(vdate >= inf_vdate))
 		) %>%
+		na.omit() %>%
 		transmute(
 			.,
 			varname = 'rffr',
@@ -408,6 +418,7 @@ local({
 		) %>%
 		group_by(., varname, freq, date, vdate) %>%
 		summarize(., value = mean(value - t_value), .groups = 'drop') %>%
+		na.omit() %>%
 		transmute(
 			.,
 			varname = 'mort30yt10yspread',
@@ -418,7 +429,6 @@ local({
 		)
 
 	hist_calc = bind_rows(cpi_data, pcepi_data, real_yields, real_spreads, real_effr, mortgage_spread)
-
 
 	hist$raw$calc <<- hist_calc
 })
@@ -451,55 +461,113 @@ local({
 			filter(hist$raw$boe, !varname %in% unique(.$varname))
 		)
 
-	monthly_agg =
-		# Get all daily/weekly varnames with pre-existing data
+
+	monthly_inputs =
 		hist_agg_0 %>%
 		filter(., freq %in% c('d', 'w')) %>%
-		# Add in month of date
-		mutate(., this_month = lubridate::floor_date(date, 'month')) %>%
-		as.data.table(.) %>%
-		# For each variable, for each month, create a dataframe of all month obs across all vintages
-		# Then for each vintage date, take the latest vintage date for every obs in the month and
-		# calculate the rolling mean
-		split(., by = c('this_month', 'varname')) %>%
-		lapply(., function(x)
-			x %>%
-				dcast(., vdate ~ date, value.var = 'value') %>%
-				.[order(vdate)] %>%
-				.[, colnames(.) := lapply(.SD, function(x) zoo::na.locf(x, na.rm = F)), .SDcols = colnames(.)] %>%
-				# {data.table(vdate = .$vdate, value = rowMeans(.[, -1], na.rm = T))} %>%
-				melt(., id.vars = 'vdate', value.name = 'value', variable.name = 'input_date', na.rm = T) %>%
-				.[, input_date := as_date(input_date)] %>%
-				.[, list(value = mean(value, na.rm = T), count = .N), by = 'vdate'] %>%
-				.[, c('varname', 'date') := list(x$varname[[1]], date = x$this_month[[1]])]
+		mutate(., target_month = floor_date(date, 'month'))
+
+	# Get all dates where any of the subcomponents are updated
+	monthly_component_dates = distinct(monthly_inputs, varname, freq, vdate, target_month)
+
+	monthly_agg =
+		# For each data update days, join all component updates available by the data update day
+		monthly_component_dates %>%
+		left_join(
+			.,
+			monthly_inputs %>%
+				transmute(., varname, target_month, component_date = date, component_vdate = vdate, component_value = value),
+			join_by(varname, target_month, vdate >= component_vdate)
 		) %>%
-		rbindlist(.) %>%
-		as_tibble(.) %>%
-		transmute(., varname, freq = 'm', date, vdate, value)
+		# Now to account for revisions, get most recent vdate only for each component_date
+		group_by(., varname, target_month, vdate, component_date) %>%
+		filter(., component_vdate == max(component_vdate)) %>%
+		ungroup(.) %>%
+		# Now for each vdate, get mean of existing values within each month
+		group_by(., varname, target_month, vdate) %>%
+		summarize(., value = mean(component_value, na.rm = T), count = n(), .groups = 'drop') %>%
+		transmute(., varname, freq = 'm', date = target_month, vdate, value)
+
+	# Replaced below with faster rolling joins, validated same outputs
+	# monthly_agg %>%
+	# 	left_join(., monthly_agg_2, by = c('varname', 'date', 'vdate', 'freq')) %>%
+	# 	filter(., round(value.x, 10) != round(value.y, 10))
+	# monthly_agg_2 =
+	# 	# Get all daily/weekly varnames with pre-existing data
+	# 	hist_agg_0 %>%
+	# 	filter(., freq %in% c('d', 'w')) %>%
+	# 	# Add in month of date
+	# 	mutate(., this_month = floor_date(date, 'month')) %>%
+	# 	as.data.table(.) %>%
+	# 	# For each variable, for each month, create a dataframe of all month obs across all vintages
+	# 	# Then for each vintage date, take the latest vintage date for every obs in the month and
+	# 	# calculate the rolling mean
+	# 	split(., by = c('this_month', 'varname')) %>%
+	# 	lapply(., function(x)
+	# 		x %>%
+	# 			dcast(., vdate ~ date, value.var = 'value') %>%
+	# 			.[order(vdate)] %>%
+	# 			.[, colnames(.) := lapply(.SD, function(x) zoo::na.locf(x, na.rm = F)), .SDcols = colnames(.)] %>%
+	# 			# {data.table(vdate = .$vdate, value = rowMeans(.[, -1], na.rm = T))} %>%
+	# 			melt(., id.vars = 'vdate', value.name = 'value', variable.name = 'input_date', na.rm = T) %>%
+	# 			.[, input_date := as_date(input_date)] %>%
+	# 			.[, list(value = mean(value, na.rm = T), count = .N), by = 'vdate'] %>%
+	# 			.[, c('varname', 'date') := list(x$varname[[1]], date = x$this_month[[1]])]
+	# 	) %>%
+	# 	rbindlist(.) %>%
+	# 	as_tibble(.) %>%
+	# 	transmute(., varname, freq = 'm', date, vdate, value)
 
 	# Works similarly as monthly aggregation but does not create new quarterly data unless all
-	# 3 monthly data points are available -this can still result in premature quarterly calcs if the last
-	# month value has been agrgegated before that last month was finished
-	quarterly_agg =
+	# 3 monthly data points are available (this can still result in premature quarterly calcs if the last
+	# month value has been agrgegated before that last month was finished)
+	quarterly_inputs =
 		monthly_agg %>%
 		bind_rows(., filter(hist_agg_0, freq == 'm')) %>%
-		mutate(., this_quarter = lubridate::floor_date(date, 'quarter')) %>%
-		as.data.table(.) %>%
-		split(., by = c('this_quarter', 'varname')) %>%
-		lapply(., function(x)
-			x %>%
-				dcast(., vdate ~ date, value.var = 'value') %>%
-				.[order(vdate)] %>%
-				.[, colnames(.) := lapply(.SD, function(x) zoo::na.locf(x, na.rm = F)), .SDcols = colnames(.)] %>%
-				melt(., id.vars = 'vdate', value.name = 'value', variable.name = 'input_date', na.rm = T) %>%
-				.[, input_date := as_date(input_date)] %>%
-				.[, list(value = mean(value, na.rm = T), count = .N), by = 'vdate'] %>%
-				.[, c('varname', 'date') := list(x$varname[[1]], date = x$this_quarter[[1]])] %>%
-				.[count == 3]
+		mutate(., target_quarter = floor_date(date, 'quarter'))
+
+	# Get all dates where any of the subcomponents are updated
+	quarterly_component_dates = distinct(quarterly_inputs, varname, freq, vdate, target_quarter)
+
+	quarterly_agg =
+		# For each data update days, join all component updates available by the data update day
+		quarterly_component_dates %>%
+		left_join(
+			.,
+			quarterly_inputs %>%
+				transmute(., varname, target_quarter, component_date = date, component_vdate = vdate, component_value = value),
+			join_by(varname, target_quarter, vdate >= component_vdate)
 		) %>%
-		rbindlist(.) %>%
-		as_tibble(.) %>%
-		transmute(., varname, freq = 'q', date, vdate, value)
+		# Now to account for revisions, get most recent vdate only for each component_date
+		group_by(., varname, target_quarter, vdate, component_date) %>%
+		filter(., component_vdate == max(component_vdate)) %>%
+		ungroup(.) %>%
+		# Now for each vdate, get mean of existing values within each month
+		group_by(., varname, target_quarter, vdate) %>%
+		summarize(., value = mean(component_value, na.rm = T), count = n(), .groups = 'drop') %>%
+		filter(., count == 3) %>%
+		transmute(., varname, freq = 'q', date = target_quarter, vdate, value)
+
+	# quarterly_agg =
+	# 	monthly_agg_2 %>%
+	# 	bind_rows(., filter(hist_agg_0, freq == 'm')) %>%
+	# 	mutate(., this_quarter = floor_date(date, 'quarter')) %>%
+	# 	as.data.table(.) %>%
+	# 	split(., by = c('this_quarter', 'varname')) %>%
+	# 	lapply(., function(x)
+	# 		x %>%
+	# 			dcast(., vdate ~ date, value.var = 'value') %>%
+	# 			.[order(vdate)] %>%
+	# 			.[, colnames(.) := lapply(.SD, function(x) zoo::na.locf(x, na.rm = F)), .SDcols = colnames(.)] %>%
+	# 			melt(., id.vars = 'vdate', value.name = 'value', variable.name = 'input_date', na.rm = T) %>%
+	# 			.[, input_date := as_date(input_date)] %>%
+	# 			.[, list(value = mean(value, na.rm = T), count = .N), by = 'vdate'] %>%
+	# 			.[, c('varname', 'date') := list(x$varname[[1]], date = x$this_quarter[[1]])] %>%
+	# 			.[count == 3]
+	# 	) %>%
+	# 	rbindlist(.) %>%
+	# 	as_tibble(.) %>%
+	# 	transmute(., varname, freq = 'q', date, vdate, value)
 
 	hist_agg =
 		bind_rows(hist_agg_0, monthly_agg, quarterly_agg) %>%
@@ -509,164 +577,256 @@ local({
 })
 
 
-# Split & Transform ----------------------------------------------------------
+# Transform ----------------------------------------------------------
+## 1. Stat & D1 Transforms ----------------------------------------------------------
+local({
+	
+	# Get each target date in the hist dataset, get vdates where its value or its LAGGED value was revised
+	# dates = date x vdate x varname x freq
+	
+	# Get all unique combinations of date-couplets (a date and its lag), and vdates where either the date
+	# and its lag was updated, but where the date itself was available
+	date_couplets = 
+		hist$agg %>%
+		distinct(., varname, freq, date_0 = date) %>%
+		mutate(., date_l = date_0 %m+% months(ifelse(freq == 'm', -1, -3))) %>%
+		mutate(., t_date_0 = date_0, t_date_l = date_l) %>%
+		pivot_longer(., cols = c(t_date_0, t_date_l), names_to = 'source', values_to = 'date') %>%
+		# Join all update dates onto target date couplets
+		inner_join(., hist$agg, by = c('varname', 'freq', 'date'), relationship = 'many-to-many') %>%
+		# Condense down into unique update dates for each couplet!
+		distinct(., varname, freq, date_0, date_l, vdate) 
+	
+	# Now for each date_0 x date_l x vdate, get the latest available values at those dates, then use it to calculate transforms
+	date_couplet_values =
+		date_couplets %>%
+		left_join(
+			.,
+			hist$agg %>% transmute(., varname, freq, date_0 = date, vdate_0 = vdate, value_0 = value),
+			join_by(varname, freq, date_0, closest(vdate >= vdate_0))
+		) %>%
+		left_join(
+			.,
+			hist$agg %>% transmute(., varname, freq, date_l = date, vdate_l = vdate, value_l = value),
+			join_by(varname, freq, date_l, closest(vdate >= vdate_l))
+		) %>% 
+		filter(., !is.na(value_0))
+	
+	# Now for each date_0 x date_l x vdate, get the latest available values at those dates, then use it to calculate transforms
+	hist_flat =
+		variable_params %>%
+		transmute(., varname, base = 'base', d1, d2) %>% 
+		pivot_longer(., cols = c(base, d1, d2), names_to = 'form', values_to = 'transform') %>%
+		filter(., transform != 'none') %>%
+		left_join(., date_couplet_values, by = 'varname', relationship = 'many-to-many') %>%
+		group_split(., transform) %>%
+		map(., function(x) {
+			if (x$transform[[1]] == 'base') x %>% mutate(., value = value_0)
+			else if (x$transform[[1]] == 'log') x %>% mutate(., value = log(value_0))
+			else if (x$transform[[1]] == 'dlog') x %>% mutate(., value = dlog(value_0/value_l))
+			else if (x$transform[[1]] == 'diff1') x %>% mutate(., value = value_0 - value_l)
+			else if (x$transform[[1]] == 'pchg') x %>% mutate(., value = (value_0/value_l - 1) * 100)
+			else if (x$transform[[1]] == 'apchg') x %>% mutate(., value = ((value_0/value_l)^ifelse(freq == 'q', 4, 12) - 1) * 100)
+			else stop('Error')
+		}) %>%
+		list_rbind() %>%
+		# Remove NAs - should only be dates at the very start
+		filter(., !is.na(value)) %>%
+		transmute(
+			., 
+			varname,
+			form,
+			freq,
+			vdate = as_date(ifelse(vdate_0 >= vdate_l | is.na(vdate_l), vdate_0, vdate_l)),
+			date = date_0,
+			value
+			) 
+	
+	hist$flat <<- hist_flat
+})
 
 ## 1. Split By Vintage Date ----------------------------------------------------------
-local({
-
-	message(str_glue('*** Splitting By Vintage Date | {format(now(), "%H:%M")}'))
-
-	# Check min dates
-	message('***** Variables Dates:')
-	hist$agg %>%
-		group_by(., varname) %>%
-		summarize(., min_dt = min(date)) %>%
-		arrange(., desc(min_dt)) %>%
-		print(., n = 5)
-
-	# Get table indicating which variables can have their historical data be revised well after the fact
-	# For these variables, not necessary to build out a full history for each vdate for later stationary transforms
-	# This saves significant time
-	# Only include variables which definitely have final vintage data within 30 days of original data
-	revisable =
-		variable_params %>%
-		mutate(
-			.,
-			hist_revisable =
-			   	!dispgroup %in% c('Interest_Rates', 'Stocks_and_Commodities') &
-				!hist_source_freq %in% c('d', 'w')
-			) %>%
-		select(., varname, hist_revisable) %>%
-		as.data.table(.)
-
-	last_obs_by_vdate =
-		hist$agg %>%
-		as.data.table(.) %>%
-		split(., by = c('varname', 'freq')) %>%
-		lapply(., function(x)  {
-
-			# message(str_glue('**** Getting last vintage dates for {x$varname[[1]]}'))
-			# For every vintage date within last 6 months, get last observation for every past date
-			# This creates lots of duplicates, especially for monthly variables - clean them later
-			# after doing stationary transforms
-			last_obs_for_all_vdates =
-				x %>%
-				.[order(vdate)] %>%
-				dcast(., varname + freq + vdate ~  date, value.var = 'value') %>%
-				.[, colnames(.) := lapply(.SD, function(x) zoo::na.locf(x, na.rm = F)), .SDcols = colnames(.)] %>%
-				melt(
-					.,
-					id.vars = c('varname', 'freq', 'vdate'),
-					value.name = 'value',
-					variable.name = 'date',
-					na.rm = T
-				) %>%
-				.[, date := as_date(date)] %>%
-				# For non revisable table, only minimal data is  needed for calculating stationary transformations
-				merge(., revisable, by = 'varname', keep.x = T) %>%
-				.[hist_revisable == T | (hist_revisable == F & vdate <= date + days(60))] %>%
-				select(., -hist_revisable)
-			return(last_obs_for_all_vdates)
-		}) %>%
-		rbindlist(.)
-
-	hist$base <<- last_obs_by_vdate
-})
+# local({
+# 
+# 	message(str_glue('*** Splitting By Vintage Date | {format(now(), "%H:%M")}'))
+# 
+# 	# Check min dates
+# 	message('***** Variables Dates:')
+# 	hist$agg %>%
+# 		group_by(., varname) %>%
+# 		summarize(., min_dt = min(date)) %>%
+# 		arrange(., desc(min_dt)) %>%
+# 		print(., n = 5)
+# 
+# 	# Get table indicating which variables can have their historical data be revised well after the fact
+# 	# For these variables, not necessary to build out a full history for each vdate for later stationary transforms
+# 	# This saves significant time
+# 	# Only include variables which definitely have final vintage data within 30 days of original data
+# 	revisable =
+# 		variable_params %>%
+# 		mutate(
+# 			.,
+# 			hist_revisable =
+# 			   	!dispgroup %in% c('Interest_Rates', 'Stocks_and_Commodities') &
+# 				!hist_source_freq %in% c('d', 'w')
+# 			) %>%
+# 		select(., varname, hist_revisable) %>%
+# 		as.data.table(.)
+# 
+# 	# Get each target date in the hist dataset, get vdates where its value or its LAGGED value was revised
+# 	# dates = date x vdate x varname x freq
+# 	# 
+# 	# Get all unique combinations of date-couplets (a date and its lag), and vdates where EITHER was updated
+# 	date_couplets = 
+# 		hist$agg %>%
+# 		distinct(., varname, freq, date_0 = date) %>%
+# 		mutate(., date_l = date_0 %m+% months(ifelse(freq == 'm', -1, -3))) %>%
+# 		mutate(., t_date_0 = date_0, t_date_l = date_l) %>%
+# 		pivot_longer(., cols = c(t_date_0, t_date_l), names_to = 'source', values_to = 'date') %>%
+# 		# Join all update dates onto target date couplets
+# 		inner_join(., hist$agg, by = c('varname', 'freq', 'date'), relationship = 'many-to-many') %>%
+# 		# Condense down into unique update dates for each couplet!
+# 		distinct(., varname, freq, date_0, date_l, vdate) 
+# 	
+# 
+# 	# 	if (transform[[1]] == 'base') z[[2]]
+# 	# else if (transform[[1]] == 'log') log(z[[2]])
+# 	# else if (transform[[1]] == 'dlog') log(z[[2]]/z[[1]])
+# 	# else if (transform[[1]] == 'diff1') z[[2]] - z[[1]]
+# 	# else if (transform[[1]] == 'pchg') (z[[2]]/z[[1]] - 1) * 100
+# 	# else if (transform[[1]] == 'apchg') ((z[[2]]/z[[1]])^{if (freq[[1]] == 'q') 4 else 12} - 1) * 100
+# 	
+# 
+# 	
+# # 	last_obs_by_vdate =
+# # 		hist$agg %>%
+# # 		as.data.table(.) %>%
+# # 		split(., by = c('varname', 'freq')) %>%
+# # 		lapply(., function(x)  {
+# # 
+# # 			# message(str_glue('**** Getting last vintage dates for {x$varname[[1]]}'))
+# # 			# For every vintage date within last 6 months, get last observation for every past date
+# # 			# This creates lots of duplicates, especially for monthly variables - clean them later
+# # 			# after doing stationary transforms
+# # 			last_obs_for_all_vdates =
+# # 				x %>%
+# # 				.[order(vdate)] %>%
+# # 				dcast(., varname + freq + vdate ~  date, value.var = 'value') %>%
+# # 				.[, colnames(.) := lapply(.SD, function(x) zoo::na.locf(x, na.rm = F)), .SDcols = colnames(.)] %>%
+# # 				melt(
+# # 					.,
+# # 					id.vars = c('varname', 'freq', 'vdate'),
+# # 					value.name = 'value',
+# # 					variable.name = 'date',
+# # 					na.rm = T
+# # 				) %>%
+# # 				.[, date := as_date(date)] %>%
+# # 				# For non revisable table, only minimal data is  needed for calculating stationary transformations
+# # 				merge(., revisable, by = 'varname', keep.x = T) %>%
+# # 				.[hist_revisable == T | (hist_revisable == F & vdate <= date + days(60))] %>%
+# # 				select(., -hist_revisable)
+# # 			return(last_obs_for_all_vdates)
+# # 		}) %>%
+# # 		rbindlist(.)
+# 
+# 	hist$base <<- last_obs_by_vdate
+# })
 
 ## 2. Add Stationary Transformations ----------------------------------------------------------
-local({
-
-	message(str_glue('*** Adding Stationary Transforms | {format(now(), "%H:%M")}'))
-
-	# Microbenchmark @ 1.8s per 100k rows
-	stat_final =
-		copy(hist$base) %>%
-		merge(., variable_params[, c('varname', 'd1', 'd2')], by = c('varname'), all = T) %>%
-		melt(
-			.,
-			id.vars = c('varname', 'freq', 'vdate', 'date', 'value'),
-			variable.name = 'form',
-			value.name = 'transform'
-			) %>%
-		.[transform != 'none'] %>%
-		.[order(varname, freq, form, vdate, date)] %>%
-		.[,
-			value := frollapply(
-				value,
-				n = 2,
-				FUN = function(z) { # Z is a vector of length equal to the window size, asc order
-					if (transform[[1]] == 'base') z[[2]]
-					else if (transform[[1]] == 'log') log(z[[2]])
-					else if (transform[[1]] == 'dlog') log(z[[2]]/z[[1]])
-					else if (transform[[1]] == 'diff1') z[[2]] - z[[1]]
-					else if (transform[[1]] == 'pchg') (z[[2]]/z[[1]] - 1) * 100
-					else if (transform[[1]] == 'apchg') ((z[[2]]/z[[1]])^{if (freq[[1]] == 'q') 4 else 12} - 1) * 100
-					else stop ('Error')
-					},
-				fill = NA
-				),
-			by = c('varname', 'freq', 'form', 'vdate')
-			] %>%
-		.[, transform := NULL] %>%
-		bind_rows(., copy(hist$base)[, form := 'base']) %>%
-		na.omit(.)
-
-	stat_final_last =
-		stat_final %>%
-		group_by(., varname) %>%
-		mutate(., max_vdate = max(vdate)) %>%
-		filter(., vdate == max(vdate)) %>%
-		select(., -max_vdate) %>%
-		ungroup(.) %>%
-		as.data.table(.)
-
-	hist$flat <<- stat_final
-	hist$flat_last <<- stat_final_last
-})
+# local({
+# 
+# 	message(str_glue('*** Adding Stationary Transforms | {format(now(), "%H:%M")}'))
+# 
+# 	# Microbenchmark @ 1.8s per 100k rows
+# 	stat_final =
+# 		copy(hist$base) %>%
+# 		merge(., variable_params[, c('varname', 'd1', 'd2')], by = c('varname'), all = T) %>%
+# 		melt(
+# 			.,
+# 			id.vars = c('varname', 'freq', 'vdate', 'date', 'value'),
+# 			variable.name = 'form',
+# 			value.name = 'transform'
+# 			) %>%
+# 		.[transform != 'none'] %>%
+# 		.[order(varname, freq, form, vdate, date)] %>%
+# 		.[,
+# 			value := frollapply(
+# 				value,
+# 				n = 2,
+# 				FUN = function(z) { # Z is a vector of length equal to the window size, asc order
+# 					if (transform[[1]] == 'base') z[[2]]
+# 					else if (transform[[1]] == 'log') log(z[[2]])
+# 					else if (transform[[1]] == 'dlog') log(z[[2]]/z[[1]])
+# 					else if (transform[[1]] == 'diff1') z[[2]] - z[[1]]
+# 					else if (transform[[1]] == 'pchg') (z[[2]]/z[[1]] - 1) * 100
+# 					else if (transform[[1]] == 'apchg') ((z[[2]]/z[[1]])^{if (freq[[1]] == 'q') 4 else 12} - 1) * 100
+# 					else stop ('Error')
+# 					},
+# 				fill = NA
+# 				),
+# 			by = c('varname', 'freq', 'form', 'vdate')
+# 			] %>%
+# 		.[, transform := NULL] %>%
+# 		bind_rows(., copy(hist$base)[, form := 'base']) %>%
+# 		na.omit(.)
+# 
+# 	stat_final_last =
+# 		stat_final %>%
+# 		group_by(., varname) %>%
+# 		mutate(., max_vdate = max(vdate)) %>%
+# 		filter(., vdate == max(vdate)) %>%
+# 		select(., -max_vdate) %>%
+# 		ungroup(.) %>%
+# 		as.data.table(.)
+# 
+# 	hist$flat <<- stat_final
+# 	hist$flat_last <<- stat_final_last
+# })
 
 ## 3. Create Monthly/Quarterly Matrices ----------------------------------------------------------
-local({
-
-	# message(str_glue('*** Creating Wide Matrices | {format(now(), "%H:%M")}'))
-	#
-	# wide =
-	# 	hist$flat %>%
-	# 	split(., by = 'freq', keep.by = F) %>%
-	# 	lapply(., function(x)
-	# 		split(x, by = 'form', keep.by = F) %>%
-	# 			lapply(., function(y)
-	# 				split(y, by = 'vdate', keep.by = T) %>%
-	# 					lapply(., function(z) {
-	# 						# message(z$vdate[[1]])
-	# 						dcast(select(z, -vdate), date ~ varname, value.var = 'value') %>%
-	# 							.[, date := as_date(date)] %>%
-	# 							.[order(date)] %>%
-	# 							as_tibble(.)
-	# 					})
-	# 			)
-	# 	)
-	#
-	# wide_last <<- lapply(wide, function(x) lapply(x, function(y) tail(y, 1)[[1]]))
-	#
-	# hist$wide <<- wide
-	# hist$wide_last <<- wide_last
-})
+# local({
+# 
+# 	message(str_glue('*** Creating Wide Matrices | {format(now(), "%H:%M")}'))
+# 
+# 	wide =
+# 		hist$flat %>%
+# 		split(., by = 'freq', keep.by = F) %>%
+# 		lapply(., function(x)
+# 			split(x, by = 'form', keep.by = F) %>%
+# 				lapply(., function(y)
+# 					split(y, by = 'vdate', keep.by = T) %>%
+# 						lapply(., function(z) {
+# 							# message(z$vdate[[1]])
+# 							dcast(select(z, -vdate), date ~ varname, value.var = 'value') %>%
+# 								.[, date := as_date(date)] %>%
+# 								.[order(date)] %>%
+# 								as_tibble(.)
+# 						})
+# 				)
+# 		)
+# 
+# 	wide_last <<- lapply(wide, function(x) lapply(x, function(y) tail(y, 1)[[1]]))
+# 
+# 	hist$wide <<- wide
+# 	hist$wide_last <<- wide_last
+# })
 
 ## 4. Strip Duplicates ---------------------------------------------------------------------
-local({
-
-	message(str_glue('*** Stripping Vintage Date Dupes | {format(now(), "%H:%M")}'))
-
-	hist_stripped =
-		copy(hist$flat) %>%
-		# Rleid changes when value changes (by vdate)
-		.[order(vdate, date), value_runlength := rleid(value), by = c('varname', 'freq', 'date', 'form')] %>%
-		# Get first rleid only for each group -
-		.[, .SD[which.min(vdate)], by = c('varname', 'freq', 'date', 'form', 'value_runlength')] %>%
-		.[, value_runlength := NULL]
-
-	hist$flat_final <<- hist_stripped
-})
+# Culled - this discards vdates where values haven't changed
+# local({
+#
+# 	message(str_glue('*** Stripping Vintage Date Dupes | {format(now(), "%H:%M")}'))
+#
+# 	hist_stripped =
+# 		copy(hist$flat) %>%
+# 		# Rleid changes when value changes (by vdate)
+# 		.[order(vdate, date), value_runlength := rleid(value), by = c('varname', 'freq', 'date', 'form')] %>%
+# 		# Get first rleid only for each group -
+# 		.[, .SD[which.min(vdate)], by = c('varname', 'freq', 'date', 'form', 'value_runlength')] %>%
+# 		.[, value_runlength := NULL]
+#
+# 	hist$flat_final <<- hist_stripped
+# })
 
 # Finalize ----------------------------------------------------------------
 
@@ -677,16 +837,16 @@ local({
 
 	# Store in SQL
 	hist_values =
-		hist$flat_final %>%
+		hist$flat %>%
 		select(., vdate, form, freq, varname, date, value)
 
 	rows_added = store_forecast_hist_values_v2(pg, hist_values, .verbose = T)
 
 	# Log
 	validation_log$rows_added <<- rows_added
-	validation_log$last_vdate <<- max(hist$flat_final$vdate)
-	validation_log$missing_varnames <<- variable_params$varname[!variable_params$varname %in% unique(hist$flat_final$varname)]
-	validation_log$rows_pulled <<- nrow(hist$flat_final)
+	validation_log$last_vdate <<- max(hist$flat$vdate)
+	validation_log$missing_varnames <<- variable_params$varname[!variable_params$varname %in% unique(hist$flat$varname)]
+	validation_log$rows_pulled <<- nrow(hist$flat)
 
 	disconnect_db(pg)
 })
