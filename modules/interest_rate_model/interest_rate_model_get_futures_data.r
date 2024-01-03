@@ -34,8 +34,8 @@ local({
 	desired_sources =
 		tibble(date = seq(
 			# Need to go 5 years ago to get all 5-year forward forecasts
-			from = floor_date(today() - months(BACKFILL_MONTHS + 60), 'month'),
-			to = floor_date(today() + months(5 * 12), 'month'),
+			from = floor_date(today('US/Eastern') %m-% months(BACKFILL_MONTHS + 60), 'month'),
+			to = floor_date(today('US/Eastern') %m+% months(5 * 12), 'month'),
 			by = '1 month'
 			)) %>%
 		mutate(., year = year(date), month = month(date)) %>%
@@ -57,7 +57,7 @@ local({
 		mutate(
 			.,
 			code = paste0(ticker, code, str_sub(year, -2)),
-			months_out = interval(floor_date(today(), 'month'), floor_date(date, 'month')) %/% months(1)
+			months_out = interval(floor_date(today('US/Eastern'), 'month'), floor_date(date, 'month')) %/% months(1)
 		) %>%
 		filter(., months_out <= max_months_out) %>%
 		transmute(., varname, code, date, tenor) %>%
@@ -247,7 +247,7 @@ local({
 local({
 
 	scrape_dates = seq(
-		max(today('US/Eastern') - months(BACKFILL_MONTHS), as_date('2019-08-16')), # Ameribor futures launch date
+		max(today('US/Eastern') %m-% months(BACKFILL_MONTHS), as_date('2019-08-16')), # Ameribor futures launch date
 		to = today('US/Eastern'),
 		by = '1 day'
 		)
@@ -277,7 +277,7 @@ local({
 			.,
 			scrape_source = 'cboe',
 			varname = 'ameribor',
-			expdate = floor_date(expdate - months(1), 'months'),
+			expdate = floor_date(expdate %m-% months(1), 'months'),
 			tenor,
 			tradedate,
 			is_final = ifelse(tradedate < today('US/Eastern'), T, F),
