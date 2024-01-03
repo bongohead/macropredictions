@@ -26,7 +26,10 @@ get_treasury_yields = function() {
 		)
 	)
 
-	responses = send_async_requests(map(urls, \(x) request(x)))
+	responses =
+		send_async_requests(map(urls, \(x) request(x) %>% req_error(is_error = \(resp) FALSE))) %>%
+		keep(., \(x) resp_has_body(x))
+
 	csv = list_rbind(map(responses, \(r) read_csv(resp_body_string(r), col_types = 'c')))
 
 	csv %>%
@@ -72,7 +75,9 @@ get_real_treasury_yields = function() {
 		)
 	)
 
-	responses = send_async_requests(map(urls, \(x) request(x)))
+	responses =
+		send_async_requests(map(urls, \(x) request(x) %>% req_error(is_error = \(resp) FALSE))) %>%
+		keep(., \(x) resp_has_body(x))
 	csv = list_rbind(map(responses, \(r) read_csv(resp_body_string(r), col_types = 'c')))
 
 	csv %>%

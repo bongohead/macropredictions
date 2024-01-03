@@ -332,7 +332,6 @@ store_forecast_hist_values_v2 = function(db, df, .verbose = F) {
 #' @return The number of rows added
 #'
 #' @import dplyr
-#' @importFrom DBI dbExecute
 #' @importFrom purrr is_scalar_logical
 #'
 #' @export
@@ -368,3 +367,49 @@ store_futures_values = function(db, df, .verbose = F) {
 	return(list(interest_rate_model_futures_values = rows_added))
 }
 
+
+#' Store curve (inflation x ttm) values in composite_inflation_yield_curves
+#'
+#' This breaks up the dataframe into chunks of size 10000 and sends them into the database.
+#'
+#' @param db The database conenction object.
+#' @param df The dataframe of forecast values. Must include columns vdate, ttm, and value
+#' @param .verbose Echo error messages.
+#'
+#' @return The number of rows added
+#'
+#' @import dplyr
+#' @importFrom purrr is_scalar_logical
+#'
+#' @export
+store_composite_inflation_yield_curve_values = function(db, df, .verbose = F) {
+
+	if (!inherits(db, 'PqConnection')) stop('Object "db" must be of class PgConnection')
+	if (!is.data.frame(df)) stop('Parameter "df" must be a data.frame.')
+	if (
+		length(colnames(df)) != 4 ||
+		!all(sort(colnames(df)) == sort(c('curve_source', 'vdate', 'ttm', 'value')))
+	) {
+		stop('Incorrect columns')
+	}
+	if (!is_scalar_logical(.verbose)) stop('Parameter ".verbose" must be a logical.')
+
+	initial_count = get_rowcount(db, 'composite_inflation_yield_curves')
+	if (.verbose == T) message('***** Initial Count: ', initial_count)
+
+	insert_result = write_df_to_sql(
+		db,
+		df,
+		'composite_inflation_yield_curves',
+		'ON CONFLICT (curve_source, vdate, ttm)
+		DO UPDATE SET value=EXCLUDED.value',
+		.chunk_size = 10000,
+		.verbose = .verbose
+	)
+
+	final_count = get_rowcount(db, 'composite_inflation_yield_curves')
+	rows_added = final_count - initial_count
+	if (.verbose == T) message('***** Rows Added: ', rows_added)
+
+	return(list(composite_inflation_yield_curves = rows_added))
+}
