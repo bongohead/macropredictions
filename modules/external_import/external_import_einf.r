@@ -60,9 +60,9 @@ local({
 		# Correct vdates
 		inner_join(., vdate_map, by = 'vdate0') %>%
 		select(., -vdate0) %>%
-		filter(., vdate >= as_date('2015-01-01')) %>%
+		filter(., vdate >= as_date('2010-01-01')) %>%
 		group_split(., vdate) %>%
-		map_dfr(., function(x)
+		map(., function(x)
 			right_join(x, tibble(ttm = 1:360), by = 'ttm') %>%
 				arrange(., ttm) %>%
 				mutate(
@@ -76,6 +76,7 @@ local({
 					date = add_with_rollback(cur_date, months(ttm - 1))
 				)
 		) %>%
+		list_rbind() %>%
 		transmute(
 			.,
 			varname = 'inf',
@@ -112,14 +113,14 @@ local({
 
 			# Get last 12 historical values
 			hist_values =
-					hist_data %>%
-					filter(., vdate <= x$vdate[[1]]) %>%
-					group_by(., date) %>%
-					filter(., vdate == max(vdate)) %>%
-					ungroup(.) %>%
-					arrange(., date) %>%
-					tail(., 12) %>%
-					select(., date, value)
+				hist_data %>%
+				filter(., vdate <= x$vdate[[1]]) %>%
+				group_by(., date) %>%
+				filter(., vdate == max(vdate)) %>%
+				ungroup(.) %>%
+				arrange(., date) %>%
+				tail(., 12) %>%
+				select(., date, value)
 
 			# Calculate monthly growth rate
 			# (1+ yttm_ahead_annualized_yield(t))^12 = (1 + monthly_growth_rate(t)) *

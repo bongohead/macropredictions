@@ -52,8 +52,8 @@ local({
 		pivot_wider(., id_cols = group, names_from = type, values_from = url) %>%
 		na.omit %>%
 		df_to_list %>%
-		.[1:12] %>%
-		imap(., function(x, i) {
+		head(12) %>%
+		imap(., .progress = T, function(x, i) {
 
 			# if (i %% 10 == 0) message('Downloading ', i)
 
@@ -134,7 +134,7 @@ local({
 
 		return(clean_import)
 		}) %>%
-		list_rbind
+		list_rbind()
 
 	fnma_clean_housing = imap(df_to_list(fnma_details), function(x, i) {
 
@@ -178,7 +178,7 @@ local({
 
 		return(clean_import)
 		}) %>%
-		list_rbind
+		list_rbind()
 
 	fnma_data =
 		bind_rows(fnma_clean_macro, fnma_clean_housing) %>%
@@ -196,7 +196,7 @@ local({
 	message('***** Missing Variables:')
 	message(
 		c('gdp', 'pce', 'pdir', 'pdin', 'govt', 'nx', 'cbi', 'cpi', 'pcepi', 'unemp', 'ffr', 't01y', 't10y',
-			'houst', 'mort30y', 'mort05y') %>%
+			'houst', 'mort30y') %>%
 			keep(., ~ !. %in% unique(fnma_data$varname)) %>%
 			paste0(., collapse = ' | ')
 		)
