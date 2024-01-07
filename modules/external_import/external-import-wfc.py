@@ -1,6 +1,5 @@
 """
-
-Script for scraping Wells Fargo economic forecasts
+Script for scraping Wells Fargo economic forecasts and reading them via OCR model.
 """
 
 #%% ------- Load libs
@@ -79,7 +78,7 @@ def download_raw_svgs():
     return downloaded_svgs
 
 new_svgs = download_raw_svgs()
-print(f'**Downloaded {len(new_svgs)} SVGs: {", ".join([Path(s).stem for s in new_svgs])}')
+print(f'***Downloaded {len(new_svgs)} SVGs: {", ".join([Path(s).stem for s in new_svgs])}')
 
 
 #%% ------- Extract and convert SVGs to PNGs that don't already exist in PNG dump
@@ -92,7 +91,7 @@ def convert_svgs_to_pngs():
 
     # Convert & grayscale
     converted_pngs = []
-    for file_to_convert in tqdm(files_to_convert):
+    for file_to_convert in files_to_convert:
         temp_path = tempfile.NamedTemporaryFile(suffix = '.png')
         png_path = DIR + '/wfc-dump/pngs/' + file_to_convert + '.png'
         try: 
@@ -111,7 +110,7 @@ def convert_svgs_to_pngs():
     return converted_pngs
 
 new_pngs = convert_svgs_to_pngs()
-print(f'**Converted {len(new_pngs)} PNGs: {", ".join([Path(s).stem for s in new_pngs])}')
+print(f'***Converted {len(new_pngs)} PNGs: {", ".join([Path(s).stem for s in new_pngs])}')
 
 #%% ------- Get list of vdates to run OCR on (any vdates with PNGs but has at least one missing variable in SQL)
 # Desired variables
@@ -153,20 +152,24 @@ existing_data = get_postgres_query(
     """
 )
 
+# Anti join desired data to existing data - returns vdates with ANY missing varname
 parse_vdates =\
     desired_data\
-    .merge(existing_data, how='outer', indicator=True, on=['vdate', 'varname'])\
-    .pipe(lambda df: df[df._merge == 'left_only'].drop('_merge', axis=1))\
+    .merge(existing_data, how = 'outer', indicator = True, on = ['vdate', 'varname'])\
+    .pipe(lambda df: df[df._merge == 'left_only'].drop('_merge', axis = 1))\
     .sort_values(by = 'vdate')\
     ['vdate']\
     .drop_duplicates()\
-    .tolist()[0:5]
+    .tolist()[0:3]
 
-print(f"Get data for: {', '.join(parse_vdates)}")
+print(f"***Get data for: {', '.join(parse_vdates)}")
 
 #%% ------- Iterate and convert PNGs to dataframes via OCR
+print(f'***Starting OCR')
 final_forecasts = []
 for i, vdate in tqdm(enumerate(parse_vdates)): 
+
+    print(f'*****OCR for: {vdate}')
 
     path = f'{DIR}/wfc-dump/pngs/{vdate}.png'
     img = np.array(Image.open(path))
@@ -217,14 +220,22 @@ for i, vdate in tqdm(enumerate(parse_vdates)):
 
     draw_easyocr_output(img2, ocr_df2, f'{DIR}/wfc-dump/parse/{vdate}-02-rownames-colnames.png')
     
-    # Detect year and quarter rows
-    years = ocr_df2[ocr_df2['text'].str.match(r'^(' + '|'.join([str(y) for y in range(2020, 2099)]) + ')$')]
-    quarters = ocr_df2[ocr_df2['text'].str.match(r'^([1-4][0OQ])$')]
+    # Detect year and quarter rows - must be in top 200 px at top
+    years = ocr_df2[
+        (ocr_df2['cy'] <= 200) & 
+        (ocr_df2['text'].str.match(r'^(' + '|'.join([str(y) for y in range(2020, 2099)]) + ')$'))
+    ]
+    quarters = ocr_df2[
+        (ocr_df2['cy'] <= 200) & 
+        (ocr_df2['text'].str.match(r'^([1-4][0OQ])$'))
+    ]
 
     if (np.abs(years['c_y'].max() - years['c_y'].min()) >= 10):
+        print(years)
         raise Exception('Y-axis discrepancy of years too large')
     
     if (np.abs(quarters['c_y'].max() - quarters['c_y'].min()) >= 10):
+        print(quarters)
         raise Exception('Y-axis discrepancy of quarters too large')
 
     # Get closest years to each row
