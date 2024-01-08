@@ -6,6 +6,7 @@ import os
 from tqdm import tqdm
 import sys 
 
+
 def load_env():
     """
     Loads dotenv file by searching through your Python search paths for an .env file.
@@ -49,6 +50,8 @@ def get_postgres_query(query: str) -> pd.DataFrame:
     Returns
         A pandas dataframe
     """
+    check_env_variables(['DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'DB_SERVER'])
+
     engine = create_engine(
         "postgresql+psycopg2://{user}:{password}@{host}/{dbname}".format(
            dbname = os.getenv('DB_DATABASE'),
@@ -74,6 +77,8 @@ def write_postgres_df(df, tablename, append = '', split_size = 1000):
         @append Additional text to append to the end of the INSERT string.
 
     """
+    check_env_variables(['DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'DB_SERVER'])
+
     conn = psycopg2.connect(
         database = os.getenv('DB_DATABASE'),
         user = os.getenv('DB_USERNAME'),
@@ -101,6 +106,29 @@ def write_postgres_df(df, tablename, append = '', split_size = 1000):
     conn.close()
     
     return row_added
+
+def execute_postgres_query(query:str) -> bool:
+    """
+    Execute a single Postgres query.
+
+    Params
+        @tablename The name of the Postgres materialized view.
+    """
+    check_env_variables(['DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'DB_SERVER'])
+
+    conn = psycopg2.connect(
+        database = os.getenv('DB_DATABASE'),
+        user = os.getenv('DB_USERNAME'),
+        password = os.getenv('DB_PASSWORD'),
+        host = os.getenv('DB_SERVER')
+    )
+    cursor = conn.cursor()    
+    cursor.execute(query)
+    cursor.close()
+    conn.close()
+
+    return True
+
 
 def split_df(df, chunk_size = 200):
    chunks = []

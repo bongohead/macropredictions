@@ -12,10 +12,15 @@ __pycache__/
 # Logs
 logs/
 
-# Saved models
+# Saved torch models
 saves/
+saved-models/*
+models/*
 **.pt 
 **.ckpt
+
+# Saved scrapes
+wfc-dump/
 
 # Secrets
 .env

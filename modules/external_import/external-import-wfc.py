@@ -222,15 +222,16 @@ for i, vdate in tqdm(enumerate(parse_vdates)):
     
     # Detect year and quarter rows - must be in top 200 px at top
     years = ocr_df2[
-        (ocr_df2['cy'] <= 200) & 
+        (ocr_df2['c_y'] <= 200) & 
         (ocr_df2['text'].str.match(r'^(' + '|'.join([str(y) for y in range(2020, 2099)]) + ')$'))
     ]
     quarters = ocr_df2[
-        (ocr_df2['cy'] <= 200) & 
+        (ocr_df2['c_y'] <= 200) & 
         (ocr_df2['text'].str.match(r'^([1-4][0OQ])$'))
     ]
 
-    if (np.abs(years['c_y'].max() - years['c_y'].min()) >= 10):
+    if (np.abs(years['c_y'].max() - years['c_y'].min()) >= 10
+        ):
         print(years)
         raise Exception('Y-axis discrepancy of years too large')
     

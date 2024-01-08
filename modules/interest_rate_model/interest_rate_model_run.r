@@ -9,7 +9,7 @@
 #' - Futures: 1 day lag: (updated same-day at 3pm ET)
 
 # Initialize ----------------------------------------------------------
-BACKTEST_MONTHS = 120 # T-AFNSv3 is limited to 2016 due to FFR_LT variable
+BACKTEST_MONTHS = 12 # T-AFNSv3 is limited to 2016 due to FFR_LT variable
 STORE_NEW_ONLY = T # Generally T; only F if there's a reason to believe that past vdates are incorrect
 
 validation_log <<- list()
