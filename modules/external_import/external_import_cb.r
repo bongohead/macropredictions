@@ -9,6 +9,7 @@ library(macropredictions)
 library(tidyverse)
 library(httr2)
 library(rvest)
+library(pdftools, include.only = 'pdf_text')
 
 ## Load Connection Info ----------------------------------------------------------
 load_env()
@@ -39,27 +40,21 @@ local({
 		req_perform %>%
 		resp_body_html
 
-	vintage_date = {
-		if (
-			html_attr(html_element(html_content, '#chConferences iframe'), 'title')
-			== 'The Conference Board US Economic Outlook, 2020-2023 (Oct)'
-		) {
-			as_date('2023-10-12')
-		} else {
-			stop('Get vintage date calculation manually')
-		}
-	}
-		# html_content %>%
-		# html_element(., '#productTypeText') %>%
-		# html_text %>%
-		# str_extract(., '[^|]+') %>%
-		# str_trim %>%
-		# fast_strptime(., format = '%B %d, %Y') %>%
-		# as_date
+	vintage_date =
+		html_content %>%
+		html_node(., 'a.downloadBtn') %>%
+		html_attr(., 'href') %>%
+		paste0('https://www.conference-board.org', .) %>%
+		pdf_text() %>%
+		str_extract(., 'Updated.*\n') %>%
+		.[1] %>%
+		str_remove_all(., 'Updated|\\n') %>%
+		str_squish(.) %>%
+		dmy()
 
 	iframe_src =
 		html_content %>%
-		html_element(., '#chConferences iframe') %>%
+		html_element(., 'iframe[data-external]') %>%
 		html_attr(., 'src') %>%
 		str_extract(., "https://datawrapper.dwcdn.net/(.*?)/") # strip off version numbers
 
@@ -72,7 +67,7 @@ local({
 		str_match(., "window.location.href='(.*?)'+") %>%
 		.[1, 2]
 
-	table_content = paste0(redirect_src, 'dataset.csv') %>% read_tsv(., col_names = F)
+	table_content = paste0(redirect_src, 'dataset.csv') %>% read_tsv(., col_names = F, col_types = 'c')
 
 	# First two rows are headers
 	headers_fixed =
