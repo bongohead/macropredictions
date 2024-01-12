@@ -1,0 +1,7 @@
+{
+    "epochs": 5,
+    "optim_lr": 2e-05,
+    "sched_gamma": 0.5,
+    "sched_steps": 400,
+    "clip": false
+}
