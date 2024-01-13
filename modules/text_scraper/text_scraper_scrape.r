@@ -31,26 +31,13 @@ local({
 		WHERE scrape_active = true"
 		)
 
-	reddit_token =
-		request('https://www.reddit.com/api/v1/access_token') %>%
-		req_headers(
-			'User-Agent' = Sys.getenv('REDDIT_UA'),
-			'Authorization' = paste0(
-				'Basic ',
-				base64(
-					txt = paste0(Sys.getenv('REDDIT_ID'), ':', Sys.getenv('REDDIT_SECRET')),
-					mode = 'character'
-				)
-			)
-		) %>%
-		req_body_form(
-			grant_type = 'client_credentials',
-			username = Sys.getenv('REDDIT_USERNAME'),
-			password = Sys.getenv('REDDIT_PASSWORD')
-		) %>%
-		req_perform() %>%
-		resp_body_json() %>%
-		.$access_token
+	reddit_token = get_reddit_token(
+		ua = Sys.getenv('REDDIT_UA'),
+		id = Sys.getenv('REDDIT_ID'),
+		secret = Sys.getenv('REDDIT_SECRET'),
+		username = Sys.getenv('REDDIT_USERNAME'),
+		password = Sys.getenv('REDDIT_PASSWORD')
+	)
 
 	# Run monthly year and all
 	search_combinations = expand_grid(
@@ -157,35 +144,36 @@ local({
 
 	message(str_glue('*** Pulling Reuters Data: {format(now(), "%H:%M")}'))
 
-	pages = 1:100 #100 normally, 3000 for backfill
+	pages = 1:10 #10 normally, 300 for backfill
 
-	http_responses = send_async_requests(
-		map(paste0(
-			'https://www.reuters.com/news/archive/businessnews?view=page&page=',
-			pages, '&pageSize=10'
-		), \(x) request(x)),
-		.chunk_size = 20,
-		.max_retries = 5,
-		.verbose = T
-		)
+	requests = map(pages, function(p) {
+		request(paste0(
+			'https://www.reuters.com/pf/api/v3/content/fetch/articles-by-search-v2',
+			'?query=',
+			URLencode(paste0(
+				'{"keyword":"business","offset":', (p - 1) * 100,',"orderby":"display_date:desc",',
+				'"sections":"/business","size":100,"website":"reuters"}'
+				)),
+			'&d=168&_website=reuters'
+			)) %>%
+			add_standard_headers()
+	})
+
+	http_responses = send_async_requests(requests, .chunk_size = 20, .max_retries = 5, .verbose = T)
 
 	cleaned_responses = imap(http_responses, .progress = F, function(x, i) {
-
-		page_content = html_node(resp_body_html(x), 'div.column1')
-
-		res =
-			tibble(
+		x %>%
+			resp_body_json() %>%
+			.$result %>%
+			.$articles %>%
+			map(., \(a) tibble(
 				page = pages[i],
-				title = html_text(html_nodes(page_content, 'h3.story-title'), trim = TRUE),
-				description = html_text(html_nodes(page_content, 'div.story-content > p'), trim = TRUE),
-				link = html_attr(html_nodes(page_content, 'div.story-content > a'), 'href'),
-				created = html_text(html_nodes(page_content, 'span.timestamp'), trim = TRUE)
-			) %>%
-			mutate(
-				.,
-				created = ifelse(str_detect(created, 'am |pm '), format(today(), '%b %d %Y'), created),
-				created = as_date(parse_date_time2(created, '%b %d %Y'))
-			)
+				title = a$title,
+				description = a$description,
+				link = a$canonical_url,
+				created = as_date(with_tz(as_datetime(a$published_time), 'US/Eastern'))
+			)) %>%
+			list_rbind()
 	})
 
 	reuters_data =
@@ -324,7 +312,7 @@ local({
 })
 
 ## Store --------------------------------------------------------
-local({
+local({0
 
 	message(str_glue('*** Sending Media Data to SQL: {format(now(), "%H:%M")}'))
 

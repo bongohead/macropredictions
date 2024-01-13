@@ -10,7 +10,6 @@ data_dump <<- list() # Stores logging data when called via controller.r
 ## Load Libs ----------------------------------------------------------'
 library(macropredictions)
 library(tidyverse)
-library(data.table)
 library(httr2)
 library(rvest)
 library(roll)
@@ -645,7 +644,7 @@ local({
 	hist$flat <<- hist_flat
 })
 
-## 1. Split By Vintage Date ----------------------------------------------------------
+## 1a. Split By Vintage Date ----------------------------------------------------------
 # local({
 # 
 # 	message(str_glue('*** Splitting By Vintage Date | {format(now(), "%H:%M")}'))
@@ -672,31 +671,6 @@ local({
 # 			) %>%
 # 		select(., varname, hist_revisable) %>%
 # 		as.data.table(.)
-# 
-# 	# Get each target date in the hist dataset, get vdates where its value or its LAGGED value was revised
-# 	# dates = date x vdate x varname x freq
-# 	# 
-# 	# Get all unique combinations of date-couplets (a date and its lag), and vdates where EITHER was updated
-# 	date_couplets = 
-# 		hist$agg %>%
-# 		distinct(., varname, freq, date_0 = date) %>%
-# 		mutate(., date_l = date_0 %m+% months(ifelse(freq == 'm', -1, -3))) %>%
-# 		mutate(., t_date_0 = date_0, t_date_l = date_l) %>%
-# 		pivot_longer(., cols = c(t_date_0, t_date_l), names_to = 'source', values_to = 'date') %>%
-# 		# Join all update dates onto target date couplets
-# 		inner_join(., hist$agg, by = c('varname', 'freq', 'date'), relationship = 'many-to-many') %>%
-# 		# Condense down into unique update dates for each couplet!
-# 		distinct(., varname, freq, date_0, date_l, vdate) 
-# 	
-# 
-# 	# 	if (transform[[1]] == 'base') z[[2]]
-# 	# else if (transform[[1]] == 'log') log(z[[2]])
-# 	# else if (transform[[1]] == 'dlog') log(z[[2]]/z[[1]])
-# 	# else if (transform[[1]] == 'diff1') z[[2]] - z[[1]]
-# 	# else if (transform[[1]] == 'pchg') (z[[2]]/z[[1]] - 1) * 100
-# 	# else if (transform[[1]] == 'apchg') ((z[[2]]/z[[1]])^{if (freq[[1]] == 'q') 4 else 12} - 1) * 100
-# 	
-# 
 # 	
 # # 	last_obs_by_vdate =
 # # 		hist$agg %>%
@@ -732,7 +706,7 @@ local({
 # 	hist$base <<- last_obs_by_vdate
 # })
 
-## 2. Add Stationary Transformations ----------------------------------------------------------
+## 2a. Add Stationary Transformations ----------------------------------------------------------
 # local({
 # 
 # 	message(str_glue('*** Adding Stationary Transforms | {format(now(), "%H:%M")}'))
@@ -783,35 +757,7 @@ local({
 # 	hist$flat_last <<- stat_final_last
 # })
 
-## 3. Create Monthly/Quarterly Matrices ----------------------------------------------------------
-# local({
-# 
-# 	message(str_glue('*** Creating Wide Matrices | {format(now(), "%H:%M")}'))
-# 
-# 	wide =
-# 		hist$flat %>%
-# 		split(., by = 'freq', keep.by = F) %>%
-# 		lapply(., function(x)
-# 			split(x, by = 'form', keep.by = F) %>%
-# 				lapply(., function(y)
-# 					split(y, by = 'vdate', keep.by = T) %>%
-# 						lapply(., function(z) {
-# 							# message(z$vdate[[1]])
-# 							dcast(select(z, -vdate), date ~ varname, value.var = 'value') %>%
-# 								.[, date := as_date(date)] %>%
-# 								.[order(date)] %>%
-# 								as_tibble(.)
-# 						})
-# 				)
-# 		)
-# 
-# 	wide_last <<- lapply(wide, function(x) lapply(x, function(y) tail(y, 1)[[1]]))
-# 
-# 	hist$wide <<- wide
-# 	hist$wide_last <<- wide_last
-# })
-
-## 4. Strip Duplicates ---------------------------------------------------------------------
+## 3a. Strip Duplicates ---------------------------------------------------------------------
 # Culled - this discards vdates where values haven't changed
 # local({
 #

@@ -88,102 +88,102 @@ local({
 
 ## CME ---------------------------------------------------------------------
 #' Gets most recent data for CME SOFR & FFR futures. Use barchart data preferrably.
-local({
-
-	# CME Group Data
-	message('Starting CME data scrape...')
-	cme_cookie =
-		request('https://www.cmegroup.com/') %>%
-		add_standard_headers %>%
-		req_perform %>%
-		get_cookies(., T) %>%
-		.$ak_bmsc
-
-	# Get CME Vintage Date
-	last_trade_date =
-		request('https://www.cmegroup.com/CmeWS/mvc/Quotes/Future/305/G?quoteCodes=null&_=') %>%
-		add_standard_headers %>%
-		list_merge(., headers = list('Host' = 'www.cmegroup.com', 'Cookie' = cme_cookie)) %>%
-		req_perform %>%
-		resp_body_json %>%
-		.$tradeDate %>%
-		parse_date_time(., 'd-b-Y') %>%
-		as_date(.)
-
-	# See https://www.federalreserve.gov/econres/feds/files/2019014pap.pdf for CME futures model
-	# SOFR 3m tenor./
-	cme_search_space = tribble(
-		~ varname, ~ cme_id, ~ tenor,
-		'ffr', '305', '30d',
-		'sofr', '8462', '3m',
-		'sofr', '8463', '1m',
-		'bsby', '10038', '3m'
-		# 't02y', '10048',
-		# 't05y', '10049',
-		# 't10y', '10050',
-		# 't30y', '10051'
-	)
-
-	cme_raw_data = list_rbind(map(df_to_list(cme_search_space), function(var) {
-
-		quotes = request(paste0(
-			'https://www.cmegroup.com/CmeWS/mvc/Quotes/Future/',
-			var$cme_id,
-			'/G?quoteCodes=null&_='
-			)) %>%
-			add_standard_headers %>%
-			list_merge(., headers = list('Host' = 'www.cmegroup.com', 'Cookie' = cme_cookie)) %>%
-			req_perform %>%
-			resp_body_json %>%
-			.$quotes
-
-		# Note: use last instead of last to get previous day's close
-		res = list_rbind(map(quotes, function(x) {
-			if (x$last %in% c('0.000', '0.00', '-')) return() # Related bug in CME website
-			tibble(
-				vdate = last_trade_date,
-				expdate = ymd(x$expirationDate),
-				value = {
-					if (str_detect(var$varname, '^t\\d\\dy$')) as.numeric(x$last)
-					else 100 - as.numeric(x$last)
-				},
-				varname = var$varname,
-				cme_id = var$cme_id,
-				tenor = var$tenor
-			)
-		}))
-
-		return(res)
-	}))
-
-	cme_raw_data %>%
-		arrange(., expdate) %>%
-		ggplot(.) +
-		geom_line(aes(x = expdate, y = value, color = cme_id))
-
-	cme_data =
-		cme_raw_data %>%
-		arrange(., expdate) %>%
-		# Get rid of forecasts for old observations
-		filter(., expdate >= floor_date(last_trade_date, 'month') & value != 100) %>%
-		transmute(
-			.,
-			scrape_source = 'cme',
-			varname,
-			expdate,
-			tenor,
-			tradedate = last_trade_date,
-			is_final = ifelse(tradedate < today('US/Eastern'), T, F),
-			value
-			)
-
-	# Most data starts in 88-89, except j=12 which starts at 1994-01-04. Misc missing obs until 2006.
-	# 	df %>%
-	#   	tidyr::pivot_wider(., names_from = j, values_from = settle) %>%
-	#     	dplyr::arrange(., date) %>% na.omit(.) %>% dplyr::group_by(year(date)) %>% dplyr::summarize(., n = n()) %>%
-	# 		View(.)
-	scraped_data$cme <<- cme_data
-})
+# local({
+#
+# 	# CME Group Data
+# 	message('Starting CME data scrape...')
+# 	cme_cookie =
+# 		request('https://www.cmegroup.com/') %>%
+# 		add_standard_headers %>%
+# 		req_perform %>%
+# 		get_cookies(., T) %>%
+# 		.$ak_bmsc
+#
+# 	# Get CME Vintage Date
+# 	last_trade_date =
+# 		request('https://www.cmegroup.com/CmeWS/mvc/Quotes/Future/305/G?quoteCodes=null&_=') %>%
+# 		add_standard_headers %>%
+# 		list_merge(., headers = list('Host' = 'www.cmegroup.com', 'Cookie' = cme_cookie)) %>%
+# 		req_perform %>%
+# 		resp_body_json %>%
+# 		.$tradeDate %>%
+# 		parse_date_time(., 'd-b-Y') %>%
+# 		as_date(.)
+#
+# 	# See https://www.federalreserve.gov/econres/feds/files/2019014pap.pdf for CME futures model
+# 	# SOFR 3m tenor./
+# 	cme_search_space = tribble(
+# 		~ varname, ~ cme_id, ~ tenor,
+# 		'ffr', '305', '30d',
+# 		'sofr', '8462', '3m',
+# 		'sofr', '8463', '1m',
+# 		'bsby', '10038', '3m'
+# 		# 't02y', '10048',
+# 		# 't05y', '10049',
+# 		# 't10y', '10050',
+# 		# 't30y', '10051'
+# 	)
+#
+# 	cme_raw_data = list_rbind(map(df_to_list(cme_search_space), function(var) {
+#
+# 		quotes = request(paste0(
+# 			'https://www.cmegroup.com/CmeWS/mvc/Quotes/Future/',
+# 			var$cme_id,
+# 			'/G?quoteCodes=null&_='
+# 			)) %>%
+# 			add_standard_headers %>%
+# 			list_merge(., headers = list('Host' = 'www.cmegroup.com', 'Cookie' = cme_cookie)) %>%
+# 			req_perform %>%
+# 			resp_body_json %>%
+# 			.$quotes
+#
+# 		# Note: use last instead of last to get previous day's close
+# 		res = list_rbind(map(quotes, function(x) {
+# 			if (x$last %in% c('0.000', '0.00', '-')) return() # Related bug in CME website
+# 			tibble(
+# 				vdate = last_trade_date,
+# 				expdate = ymd(x$expirationDate),
+# 				value = {
+# 					if (str_detect(var$varname, '^t\\d\\dy$')) as.numeric(x$last)
+# 					else 100 - as.numeric(x$last)
+# 				},
+# 				varname = var$varname,
+# 				cme_id = var$cme_id,
+# 				tenor = var$tenor
+# 			)
+# 		}))
+#
+# 		return(res)
+# 	}))
+#
+# 	cme_raw_data %>%
+# 		arrange(., expdate) %>%
+# 		ggplot(.) +
+# 		geom_line(aes(x = expdate, y = value, color = cme_id))
+#
+# 	cme_data =
+# 		cme_raw_data %>%
+# 		arrange(., expdate) %>%
+# 		# Get rid of forecasts for old observations
+# 		filter(., expdate >= floor_date(last_trade_date, 'month') & value != 100) %>%
+# 		transmute(
+# 			.,
+# 			scrape_source = 'cme',
+# 			varname,
+# 			expdate,
+# 			tenor,
+# 			tradedate = last_trade_date,
+# 			is_final = ifelse(tradedate < today('US/Eastern'), T, F),
+# 			value
+# 			)
+#
+# 	# Most data starts in 88-89, except j=12 which starts at 1994-01-04. Misc missing obs until 2006.
+# 	# 	df %>%
+# 	#   	tidyr::pivot_wider(., names_from = j, values_from = settle) %>%
+# 	#     	dplyr::arrange(., date) %>% na.omit(.) %>% dplyr::group_by(year(date)) %>% dplyr::summarize(., n = n()) %>%
+# 	# 		View(.)
+# 	scraped_data$cme <<- cme_data
+# })
 
 ## ICE ---------------------------------------------------------------------
 #' SONIA and ESTR futures
