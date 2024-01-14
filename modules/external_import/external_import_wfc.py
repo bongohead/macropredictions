@@ -27,7 +27,6 @@ reader = easyocr.Reader(['en'], gpu = False)
 load_env()
 
 validation_log = {}
-data_dump = {}
 
 #%% ------- Download any new SVGs that don't already exist in a folder
 def download_raw_svgs():

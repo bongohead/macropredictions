@@ -5,7 +5,6 @@
 # Initialize ----------------------------------------------------------
 IMPORT_DATE_START = '2007-01-01'
 validation_log <<- list() # Stores logging data when called via controller.r
-data_dump <<- list() # Stores logging data when called via controller.r
 
 ## Load Libs ----------------------------------------------------------'
 library(macropredictions)
@@ -579,13 +578,13 @@ local({
 # Transform ----------------------------------------------------------
 ## 1. Stat & D1 Transforms ----------------------------------------------------------
 local({
-	
+
 	# Get each target date in the hist dataset, get vdates where its value or its LAGGED value was revised
 	# dates = date x vdate x varname x freq
-	
+
 	# Get all unique combinations of date-couplets (a date and its lag), and vdates where either the date
 	# and its lag was updated, but where the date itself was available
-	date_couplets = 
+	date_couplets =
 		hist$agg %>%
 		distinct(., varname, freq, date_0 = date) %>%
 		mutate(., date_l = date_0 %m+% months(ifelse(freq == 'm', -1, -3))) %>%
@@ -594,8 +593,8 @@ local({
 		# Join all update dates onto target date couplets
 		inner_join(., hist$agg, by = c('varname', 'freq', 'date'), relationship = 'many-to-many') %>%
 		# Condense down into unique update dates for each couplet!
-		distinct(., varname, freq, date_0, date_l, vdate) 
-	
+		distinct(., varname, freq, date_0, date_l, vdate)
+
 	# Now for each date_0 x date_l x vdate, get the latest available values at those dates, then use it to calculate transforms
 	date_couplet_values =
 		date_couplets %>%
@@ -608,13 +607,13 @@ local({
 			.,
 			hist$agg %>% transmute(., varname, freq, date_l = date, vdate_l = vdate, value_l = value),
 			join_by(varname, freq, date_l, closest(vdate >= vdate_l))
-		) %>% 
+		) %>%
 		filter(., !is.na(value_0))
-	
+
 	# Now for each date_0 x date_l x vdate, get the latest available values at those dates, then use it to calculate transforms
 	hist_flat =
 		variable_params %>%
-		transmute(., varname, base = 'base', d1, d2) %>% 
+		transmute(., varname, base = 'base', d1, d2) %>%
 		pivot_longer(., cols = c(base, d1, d2), names_to = 'form', values_to = 'transform') %>%
 		filter(., transform != 'none') %>%
 		left_join(., date_couplet_values, by = 'varname', relationship = 'many-to-many') %>%
@@ -632,23 +631,23 @@ local({
 		# Remove NAs - should only be dates at the very start
 		filter(., !is.na(value)) %>%
 		transmute(
-			., 
+			.,
 			varname,
 			form,
 			freq,
 			vdate = as_date(ifelse(vdate_0 >= vdate_l | is.na(vdate_l), vdate_0, vdate_l)),
 			date = date_0,
 			value
-			) 
-	
+			)
+
 	hist$flat <<- hist_flat
 })
 
 ## 1a. Split By Vintage Date ----------------------------------------------------------
 # local({
-# 
+#
 # 	message(str_glue('*** Splitting By Vintage Date | {format(now(), "%H:%M")}'))
-# 
+#
 # 	# Check min dates
 # 	message('***** Variables Dates:')
 # 	hist$agg %>%
@@ -656,7 +655,7 @@ local({
 # 		summarize(., min_dt = min(date)) %>%
 # 		arrange(., desc(min_dt)) %>%
 # 		print(., n = 5)
-# 
+#
 # 	# Get table indicating which variables can have their historical data be revised well after the fact
 # 	# For these variables, not necessary to build out a full history for each vdate for later stationary transforms
 # 	# This saves significant time
@@ -671,13 +670,13 @@ local({
 # 			) %>%
 # 		select(., varname, hist_revisable) %>%
 # 		as.data.table(.)
-# 	
+#
 # # 	last_obs_by_vdate =
 # # 		hist$agg %>%
 # # 		as.data.table(.) %>%
 # # 		split(., by = c('varname', 'freq')) %>%
 # # 		lapply(., function(x)  {
-# # 
+# #
 # # 			# message(str_glue('**** Getting last vintage dates for {x$varname[[1]]}'))
 # # 			# For every vintage date within last 6 months, get last observation for every past date
 # # 			# This creates lots of duplicates, especially for monthly variables - clean them later
@@ -702,15 +701,15 @@ local({
 # # 			return(last_obs_for_all_vdates)
 # # 		}) %>%
 # # 		rbindlist(.)
-# 
+#
 # 	hist$base <<- last_obs_by_vdate
 # })
 
 ## 2a. Add Stationary Transformations ----------------------------------------------------------
 # local({
-# 
+#
 # 	message(str_glue('*** Adding Stationary Transforms | {format(now(), "%H:%M")}'))
-# 
+#
 # 	# Microbenchmark @ 1.8s per 100k rows
 # 	stat_final =
 # 		copy(hist$base) %>%
@@ -743,7 +742,7 @@ local({
 # 		.[, transform := NULL] %>%
 # 		bind_rows(., copy(hist$base)[, form := 'base']) %>%
 # 		na.omit(.)
-# 
+#
 # 	stat_final_last =
 # 		stat_final %>%
 # 		group_by(., varname) %>%
@@ -752,7 +751,7 @@ local({
 # 		select(., -max_vdate) %>%
 # 		ungroup(.) %>%
 # 		as.data.table(.)
-# 
+#
 # 	hist$flat <<- stat_final
 # 	hist$flat_last <<- stat_final_last
 # })

@@ -2,7 +2,6 @@
 
 # Initialize ----------------------------------------------------------
 validation_log <<- list()
-data_dump <<- list()
 
 ## Load Libs ----------------------------------------------------------
 library(macropredictions)

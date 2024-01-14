@@ -11,7 +11,6 @@
 BACKFILL_MONTHS = 3
 
 validation_log <<- list()
-data_dump <<- list()
 
 ## Load Libs ----------------------------------------------------------
 library(macropredictions)

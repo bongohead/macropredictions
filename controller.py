@@ -58,14 +58,12 @@ try:
     script_output = {
        'success': True,
        'validation_log': validation_log if 'validation_log' in globals() else None,
-       'data_dump': data_dump if 'validation_log' in globals() else None,
        'err_message': None
     }
 except Exception as e:
     script_output = {
        'success': False,
        'validation_log': validation_log if 'validation_log' in globals() else None,
-       'data_dump': data_dump if 'validation_log' in globals() else None,
        'err_message': str(e)
     }
 
@@ -86,9 +84,6 @@ log_results = {
 	'validation_log': json.dumps(script_output['validation_log'])
         if isinstance(script_output['validation_log'], list) or isinstance(script_output['validation_log'], dict)
         else script_output['validation_log'],
-	'data_dump': json.dumps(script_output['data_dump']) 
-        if isinstance(script_output['data_dump'], list) or isinstance(script_output['data_dump'], dict)
-        else script_output['data_dump'],
 	'err_message': script_output['err_message'],
 	'stdout': stdout
 }

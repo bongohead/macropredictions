@@ -79,18 +79,16 @@ script_output = tryCatch(
 
 		# sink(type = 'output')
 		# sink(type = 'message')
-		# Store any global variables named validation_log or data_dump from the job
+		# Store any global variables named validation_log from the job
 		list(
 			success = T,
 			validation_log = if (exists('validation_log')) validation_log else NULL,
-			data_dump = if (exists('data_dump')) data_dump else NULL,
 			err_message = NULL
 			)
 	},
 	error = function(e) list(
 		success = F,
 		validation_log = if (exists('validation_log')) validation_log else NULL,
-		data_dump = if (exists('data_dump')) data_dump else NULL,
 		err_message = conditionMessage(e)
 		)
 	)
@@ -114,10 +112,6 @@ log_results = list(
 		if (is.list(script_output$validation_log)) toJSON(script_output$validation_log, auto_unbox = T)
 		else script_output$validation_log
 		},
-	data_dump = {
-		if (is.list(script_output$data_dump)) toJSON(script_output$validation_log, auto_unbox = T)
-		else script_output$data_dump
-	},
 	err_message = script_output$err_message,
 	stdout = stdout
 )

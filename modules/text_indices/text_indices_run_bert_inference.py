@@ -24,7 +24,6 @@ from py_helpers.db import get_postgres_query, write_postgres_df, load_env
 load_env()
 device = torch.device('cpu')
 validation_log = {}
-data_dump = {}
 
 #%% ------- Set constants
 model_save_dir = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'saved_models')
