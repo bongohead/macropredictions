@@ -4,16 +4,17 @@ Script for scraping Wells Fargo economic forecasts and reading them via OCR mode
 
 #%% ------- Load libs
 from pathlib import Path
+import os
 import re
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-import datetime
+from datetime import datetime
 import tempfile
 import pytz
 
 from cairosvg import svg2png
-import easyocr
+from easyocr import Reader
 from PIL import Image
 
 import requests
@@ -22,11 +23,12 @@ from bs4 import BeautifulSoup
 from py_helpers.db import load_env, get_postgres_query, write_postgres_df, execute_postgres_query
 from py_helpers.ocr.easyocr import easyocr_to_df, draw_easyocr_output, get_bb_darkness
 
-DIR = str(Path(__file__).parent.absolute())
-reader = easyocr.Reader(['en'], gpu = False)
 load_env()
-
 validation_log = {}
+
+#%% Set constants
+save_dir = os.path.join(os.getenv('MP_DIR'), 'modules', 'external_import', 'wfc_dump')
+reader = Reader(['en'], gpu = False, model_storage_directory = os.path.join(save_dir, 'models'), download_enabled = True)
 
 #%% ------- Download any new SVGs that don't already exist in a folder
 def download_raw_svgs():
@@ -36,7 +38,7 @@ def download_raw_svgs():
         match = re.search(r'\d{2}/\d{2}/\d{4}', str.strip())
         if match:
             date_str = match.group()
-            dt = datetime.datetime.strptime(date_str, '%m/%d/%Y')
+            dt = datetime.strptime(date_str, '%m/%d/%Y')
             formatted_date = dt.strftime('%Y-%m-%d')
             return formatted_date
         else:
@@ -51,7 +53,7 @@ def download_raw_svgs():
             for li in li_els
         ]
     
-    svg_files = [f.stem for f in Path(DIR + '/wfc-dump/svgs').glob('*.svg')]
+    svg_files = [f.stem for f in Path(save_dir + '/svgs').glob('*.svg')]
     pages_with_link = [p for p in get_pages() if p['vdate'] not in svg_files]
 
     # Get link
@@ -69,7 +71,7 @@ def download_raw_svgs():
     downloaded_svgs = []
     for p in pages_with_img_link:
         img_resp = requests.get(p['img_href'])
-        path = DIR + '/wfc-dump/svgs/' + p['vdate'] + '.svg'
+        path = f"{save_dir}/svgs/{p['vdate']}.svg"
         with open(path, 'wb') as f:
             f.write(img_resp.content)
             downloaded_svgs.append(path)
@@ -78,6 +80,7 @@ def download_raw_svgs():
 
 new_svgs = download_raw_svgs()
 print(f'***Downloaded {len(new_svgs)} SVGs: {", ".join([Path(s).stem for s in new_svgs])}')
+validation_log['new_svgs'] = new_svgs
 
 
 #%% ------- Extract and convert SVGs to PNGs that don't already exist in PNG dump
@@ -85,17 +88,17 @@ def convert_svgs_to_pngs():
 
     scale = 5 
 
-    exists = [f.stem for f in Path(DIR + '/wfc-dump/pngs').glob('*.png')]
-    files_to_convert = sorted([f.stem for f in Path(DIR + '/wfc-dump/svgs').glob('*.svg') if f.stem not in exists])
+    exists = [f.stem for f in Path(save_dir + '/pngs').glob('*.png')]
+    files_to_convert = sorted([f.stem for f in Path(save_dir + '/svgs').glob('*.svg') if f.stem not in exists])
 
     # Convert & grayscale
     converted_pngs = []
     for file_to_convert in files_to_convert:
         temp_path = tempfile.NamedTemporaryFile(suffix = '.png')
-        png_path = DIR + '/wfc-dump/pngs/' + file_to_convert + '.png'
+        png_path = save_dir + '/pngs/' + file_to_convert + '.png'
         try: 
             # Create initial PNG
-            with open(DIR + '/wfc-dump/svgs/' + file_to_convert + '.svg', 'r') as f:
+            with open(save_dir + '/svgs/' + file_to_convert + '.svg', 'r') as f:
                 svg_data = f.read()
             svg2png(svg_data, write_to = temp_path, scale = scale)
             init_png = Image.open(temp_path)
@@ -110,6 +113,7 @@ def convert_svgs_to_pngs():
 
 new_pngs = convert_svgs_to_pngs()
 print(f'***Converted {len(new_pngs)} PNGs: {", ".join([Path(s).stem for s in new_pngs])}')
+validation_log['new_pngs'] = new_pngs
 
 #%% ------- Get list of vdates to run OCR on (any vdates with PNGs but has at least one missing variable in SQL)
 # Desired variables
@@ -136,7 +140,7 @@ varnames_map = pd.DataFrame.from_records(
     columns = ['rn', 'varname']
 )
 
-desired_vdates = [f.stem for f in Path(DIR + '/wfc-dump/pngs').glob('*.png')]
+desired_vdates = [f.stem for f in Path(save_dir + '/pngs').glob('*.png')]
 desired_data = varnames_map[['varname']].merge(pd.DataFrame({'vdate': desired_vdates}), how = 'cross')
 
 # Existing data
@@ -159,18 +163,18 @@ parse_vdates =\
     .sort_values(by = 'vdate')\
     ['vdate']\
     .drop_duplicates()\
-    .tolist()[0:3]
+    .tolist()[0:4]
 
 print(f"***Get data for: {', '.join(parse_vdates)}")
 
 #%% ------- Iterate and convert PNGs to dataframes via OCR
 print(f'***Starting OCR')
 final_forecasts = []
-for i, vdate in tqdm(enumerate(parse_vdates)): 
+for i, vdate in (enumerate(parse_vdates)): 
 
     print(f'*****OCR for: {vdate}')
 
-    path = f'{DIR}/wfc-dump/pngs/{vdate}.png'
+    path = f'{save_dir}/pngs/{vdate}.png'
     img = np.array(Image.open(path))
 
     ### First pass - strip outside borders ###### 
@@ -184,7 +188,7 @@ for i, vdate in tqdm(enumerate(parse_vdates)):
         height_ths = 1.0 # maximum difference in y height to shift boxes
     ))
 
-    # draw_easyocr_output(img, ocr_df, f'{DIR}/wfc-dump/parse/{vdate}-00-prestrip.png')
+    # draw_easyocr_output(img, ocr_df, f'{save_dir}/parse/{vdate}-00-prestrip.png')
 
     # Get the upper and right bounding box; second instance of word "actual" 
     if len(ocr_df[ocr_df['text'] == 'Actual']) != 2: 
@@ -207,7 +211,7 @@ for i, vdate in tqdm(enumerate(parse_vdates)):
     # Removal region
     img2 = img.copy()[(actual_box['bl_y'] - 15):(bond_box['bl_y'] + 15), 5:(actual_box['bl_x'] - 30)]
 
-    Image.fromarray(img2).save(f'{DIR}/wfc-dump/parse/{vdate}-01-stripped.png')
+    Image.fromarray(img2).save(f'{save_dir}/parse/{vdate}-01-stripped.png')
     
     #### Second pass - get rownames and colnames ####    
     # Wide boxes to capture 
@@ -217,7 +221,7 @@ for i, vdate in tqdm(enumerate(parse_vdates)):
         add_margin = .3, ycenter_ths = 0.75, width_ths = 2.00, height_ths = 1.00
     ))
 
-    draw_easyocr_output(img2, ocr_df2, f'{DIR}/wfc-dump/parse/{vdate}-02-rownames-colnames.png')
+    draw_easyocr_output(img2, ocr_df2, f'{save_dir}/parse/{vdate}-02-rownames-colnames.png')
     
     # Detect year and quarter rows - must be in top 200 px at top
     years = ocr_df2[
@@ -294,7 +298,7 @@ for i, vdate in tqdm(enumerate(parse_vdates)):
             slope_ths = .25, add_margin = .45, ycenter_ths = 0.75, width_ths = 1.50, height_ths = 2.0,
             allowlist = '0123456789.-'
         ))
-        # draw_easyocr_output(img_tmp, ocr_tmp, f'{DIR}/wfc-dump/parse/{vdate}-04-col-{str(i).zfill(2)}.png')
+        # draw_easyocr_output(img_tmp, ocr_tmp, f'{save_dir}/parse/{vdate}-04-col-{str(i).zfill(2)}.png')
 
         # Get only forecast (shaded) regions); shift coords back to proper position
         forecast_region =\
@@ -341,7 +345,7 @@ for i, vdate in tqdm(enumerate(parse_vdates)):
         parsed_dfs.append(forecast_mapped)
     
     parsed_df = pd.concat(parsed_dfs).assign(vdate = vdate)
-    draw_easyocr_output(img2, parsed_df.assign(text = parsed_df['value']), f'{DIR}/wfc-dump/parse/{vdate}-03-final.png')
+    draw_easyocr_output(img2, parsed_df.assign(text = parsed_df['value']), f'{save_dir}/parse/{vdate}-03-final.png')
 
     final_forecasts.append(parsed_df)
 
@@ -367,7 +371,7 @@ if len(parse_vdates) > 0:
 #%% ------- Write to SQL
 if len(parse_vdates) > 0:
 
-    utc_now = datetime.datetime.now(pytz.utc)
+    utc_now = datetime.now(pytz.utc)
     est = pytz.timezone('US/Eastern')
     est_now = utc_now.astimezone(est)
     est_date = est_now.strftime('%Y-%m-%d')
@@ -399,3 +403,6 @@ if len(parse_vdates) > 0:
 
 else:
     validation_log['rows_added'] = 0
+
+
+# %%

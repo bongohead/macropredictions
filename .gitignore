@@ -20,7 +20,7 @@ models/*
 **.ckpt
 
 # Saved scrapes
-wfc-dump/
+wfc_dump/
 
 # Secrets
 .env
