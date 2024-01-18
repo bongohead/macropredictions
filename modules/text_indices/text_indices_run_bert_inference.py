@@ -26,7 +26,7 @@ device = torch.device('cpu')
 validation_log = {}
 
 #%% ------- Set constants
-model_save_dir = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'saved_models')
+model_save_dir = os.path.join(os.getenv('MP_DIR'), 'modules', 'text_indices', 'saved_models')
 model_defs = [
     ('financial_health', 'financial_sentiment', 'financial_health_v1-financial_sentiment-20231112', 'epoch_002_step_00000'),
     ('financial_health', 'employment_status', 'financial_health_v1-employment_status-20231112', 'epoch_002_step_00000')
