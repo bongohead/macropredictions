@@ -90,7 +90,7 @@ local({
 			pages = '1',
 			flavor = 'stream',
 			# Below needed to prevent split wrapping columns correctly https://www.fanniemae.com/media/42376/display
-			column_tol = -2,
+			column_tol = -5,
 			edge_tol = 60
 			#table_areas = list('100, 490, 700, 250')
 			)[0]$df %>%
@@ -98,9 +98,13 @@ local({
 
 		col_names =
 			df_to_list(raw_import[3, ])[[1]] %>%
-			str_replace_all(., coll(c('.' = 'Q'))) %>%
-			paste0('20', .) %>%
-			{ifelse(. == '20', 'varname', .)}
+			keep(., \(x) x != '' & !is.na(x)) %>%
+			map(., \(x) {
+				if (str_detect(x, coll('.'))) paste0('20', str_replace(x, coll('.'), 'Q'))
+				else x
+				}) %>%
+			c('varname', .) %>%
+			unname(.)
 
 		clean_import =
 			raw_import[4:nrow(raw_import), ] %>%
