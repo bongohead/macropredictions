@@ -90,8 +90,8 @@ local({
 			pages = '1',
 			flavor = 'stream',
 			# Below needed to prevent split wrapping columns correctly https://www.fanniemae.com/media/42376/display
-			column_tol = -5,
-			edge_tol = 60
+			column_tol = -3.5, # -5
+			edge_tol = 60 # 60
 			#table_areas = list('100, 490, 700, 250')
 			)[0]$df %>%
 			as_tibble(.)
