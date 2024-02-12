@@ -191,7 +191,7 @@ for i, vdate in (enumerate(parse_vdates)):
     # draw_easyocr_output(img, ocr_df, f'{save_dir}/parse/{vdate}-00-prestrip.png')
 
     # Get the upper and right bounding box; second instance of word "actual" 
-    if len(ocr_df[ocr_df['text'] == 'Actual']) != 2: 
+    if len(ocr_df[ocr_df['text'] == 'Actual']) != 2:
         raise Exception('Unable to find upper & right bound - count of "actual" not 2')
 
     actual_box =\
@@ -202,7 +202,7 @@ for i, vdate in (enumerate(parse_vdates)):
     # Get the bottom bounding box; first instance of the word "bond"
     if len(ocr_df[ocr_df['text'].str.contains('Bond')]) != 1: 
         raise Exception('Unable to find bottom bound - count of "bond" not 1')
-
+    
     bond_box =\
         ocr_df\
         .pipe(lambda df: df[df['text'].str.contains('Bond')])\
@@ -216,7 +216,7 @@ for i, vdate in (enumerate(parse_vdates)):
     #### Second pass - get rownames and colnames ####    
     # Wide boxes to capture 
     ocr_df2 = easyocr_to_df(reader.readtext(
-        image = img2, min_size = 20, mag_ratio = 4,
+        image = img2, min_size = 25, mag_ratio = 4,
         slope_ths = .25, contrast_ths = .01, adjust_contrast = .75,
         add_margin = .3, ycenter_ths = 0.75, width_ths = 2.00, height_ths = 1.00
     ))
@@ -228,15 +228,17 @@ for i, vdate in (enumerate(parse_vdates)):
         (ocr_df2['c_y'] <= 200) & 
         (ocr_df2['text'].str.match(r'^(' + '|'.join([str(y) for y in range(2020, 2099)]) + ')$'))
     ]
+
+    if (np.abs(years['c_y'].max() - years['c_y'].min()) >= 10):
+        print(years)
+        raise Exception('Y-axis discrepancy of years too large')
+
     quarters = ocr_df2[
-        (ocr_df2['c_y'] <= 200) & 
+        (ocr_df2['c_y'] <= 200) &
+        (ocr_df2['c_y'] >= years['bl_y'][0]) & 
         (ocr_df2['text'].str.match(r'^([1-4][0OQ])$'))
     ]
 
-    if (np.abs(years['c_y'].max() - years['c_y'].min()) >= 10
-        ):
-        print(years)
-        raise Exception('Y-axis discrepancy of years too large')
     
     if (np.abs(quarters['c_y'].max() - quarters['c_y'].min()) >= 10):
         print(quarters)
