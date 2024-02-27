@@ -1,57 +1,3 @@
-#' Returns data from St. Louis Federal Reserve Economic Database (FRED)
-#'
-#' @param series_id The FRED identifier of the time series to pull.
-#' @param api_key A valid FRED API key.
-#' @param .freq One of 'd', 'm', 'q'. If NULL, returns highest available frequency.
-#' @param .return_vintages If TRUE, returns all historic recordings of an observation ('vintages').
-#' @param .vintage_date If .return_vintages = TRUE, .vintage_date can be set to only return the vintage for a single date.
-#' @param .obs_start The default start date of results to return.
-#' @param .verbose If TRUE, echoes error messages.
-#'
-#' @return A data frame of data
-#'
-#' @import dplyr purrr httr2
-#' @importFrom lubridate with_tz now as_date
-#'
-#' @export
-get_fred_data = function(series_id, api_key, .freq = NULL, .return_vintages = F, .vintage_date = NULL, .obs_start = '2000-01-01', .verbose = F) {
-
-	today = as_date(with_tz(now(), tz = 'America/Chicago'))
-
-	url = paste0(
-		'https://api.stlouisfed.org/fred/series/observations?',
-		'series_id=', series_id,
-		'&api_key=', api_key,
-		'&file_type=json',
-		'&realtime_start=', if (.return_vintages == T & is.null(.vintage_date)) .obs_start else if (.return_vintages == T & !is.null(.vintage_date)) .vintage_date else today,
-		'&realtime_end=', if (.return_vintages == T & !is.null(.vintage_date)) .vintage_date else today,
-		'&observation_start=', .obs_start,
-		'&observation_end=', today,
-		if(!is.null(.freq)) paste0('&frequency=', .freq) else '',
-		'&aggregation_method=avg'
-		)
-
-	if (.verbose == TRUE) message(url)
-
-	request(url) %>%
-		req_perform %>%
-		resp_body_json %>%
-		.$observations %>%
-		map(., as_tibble) %>%
-		list_rbind %>%
-		filter(., value != '.') %>%
-		na.omit %>%
-		transmute(
-			.,
-			date = as_date(date),
-			vintage_date = as_date(realtime_start),
-			varname = series_id,
-			value = as.numeric(value)
-		) %>%
-		{if(.return_vintages == TRUE) . else select(., -vintage_date)} %>%
-		return(.)
-}
-
 #' Returns last available observations from St. Louis Federal Reserve Economic Database (FRED)
 #'
 #' @param pull_ids A vector of FRED series IDs to pull from such as `c(id1, id2, ...)`;
@@ -306,5 +252,65 @@ get_fred_obs_with_vintage = function(pull_ids, api_key, .obs_start = '2000-01-01
 
 
 
+#' Returns data from St. Louis Federal Reserve Economic Database (FRED)
+#'
+#' @param series_id The FRED identifier of the time series to pull.
+#' @param api_key A valid FRED API key.
+#' @param .freq One of 'd', 'm', 'q'. If NULL, returns highest available frequency.
+#' @param .return_vintages If TRUE, returns all historic recordings of an observation ('vintages').
+#' @param .vintage_date If .return_vintages = TRUE, .vintage_date can be set to only return the vintage for a single date.
+#' @param .obs_start The default start date of results to return.
+#' @param .verbose If TRUE, echoes error messages.
+#'
+#' @return A data frame of data
+#'
+#' @description
+#' `r lifecycle::badge("deprecated")`
+#' Deprecated. Please use `get_fred_obs_with_vintage` or `get_fred_obs` instead.
+#'
+#'
+#' @import dplyr purrr httr2
+#' @importFrom lubridate with_tz now as_date
+#'
+#' @export
+get_fred_data = function(series_id, api_key, .freq = NULL, .return_vintages = F, .vintage_date = NULL, .obs_start = '2000-01-01', .verbose = F) {
+
+	lifecycle::deprecate_warn('1.0.0', "get_fred_data()", "get_fred_obs()")
+
+	today = as_date(with_tz(now(), tz = 'America/Chicago'))
+
+	url = paste0(
+		'https://api.stlouisfed.org/fred/series/observations?',
+		'series_id=', series_id,
+		'&api_key=', api_key,
+		'&file_type=json',
+		'&realtime_start=', if (.return_vintages == T & is.null(.vintage_date)) .obs_start else if (.return_vintages == T & !is.null(.vintage_date)) .vintage_date else today,
+		'&realtime_end=', if (.return_vintages == T & !is.null(.vintage_date)) .vintage_date else today,
+		'&observation_start=', .obs_start,
+		'&observation_end=', today,
+		if(!is.null(.freq)) paste0('&frequency=', .freq) else '',
+		'&aggregation_method=avg'
+	)
+
+	if (.verbose == TRUE) message(url)
+
+	request(url) %>%
+		req_perform %>%
+		resp_body_json %>%
+		.$observations %>%
+		map(., as_tibble) %>%
+		list_rbind %>%
+		filter(., value != '.') %>%
+		na.omit %>%
+		transmute(
+			.,
+			date = as_date(date),
+			vintage_date = as_date(realtime_start),
+			varname = series_id,
+			value = as.numeric(value)
+		) %>%
+		{if(.return_vintages == TRUE) . else select(., -vintage_date)} %>%
+		return(.)
+}
 
 
