@@ -155,6 +155,28 @@ create_insert_query = function(df, tblname, .append = '') {
 #'
 #' @return A count of the number of rows added.
 #'
+#' @examples \dontrun{
+#' pg = connect_pg()
+#' # Create a table with a unique key
+#' DBI::dbExecute(
+#'   pg,
+#' 	 "CREATE TABLE test (varname TEXT,  date TEXT,  value DECIMAL, UNIQUE(varname, date))"
+#'   )
+#' to_write =
+#' 	 get('economics') %>%
+#' 	 pivot_longer(., -date, names_to = 'varname', values_to = 'value')
+#'
+#' # Test writing everything except pce
+#' rows_written = write_df_to_sql(pg, filter(to_write, varname != 'pce'), 'test', .append = 'ON CONFLICT (varname, date) DO NOTHING')
+#' print(rows_written)
+#'
+#' # Test now writing the entire table with pce - only the pce rows should insert
+#' rows_written = write_df_to_sql(pg, to_write, 'test', .append = 'ON CONFLICT (varname, date) DO NOTHING')
+#' print(rows_written)
+#'
+#' DBI::dbExecute(pg, 'DROP TABLE test')
+#' }
+#'
 #' @import dplyr
 #' @importFrom purrr map_dbl is_scalar_logical is_scalar_double is_scalar_integer is_scalar_character
 #' @importFrom DBI dbExecute
