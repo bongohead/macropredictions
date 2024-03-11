@@ -38,7 +38,7 @@ async def get_prompts(
         print(results)
     """
 
-	async def make_request(session, prompt: list):
+    async def make_request(session, prompt: list):
 		
         url = 'https://api.openai.com/v1/chat/completions'
         headers = {"Authorization": "Bearer " + api_key}

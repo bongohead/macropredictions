@@ -6,7 +6,6 @@ import os
 from tqdm import tqdm
 import sys 
 
-
 def load_env():
     """
     Loads dotenv file by searching through your Python search paths for an .env file.
@@ -131,8 +130,12 @@ def execute_postgres_query(query:str) -> bool:
 
 
 def split_df(df, chunk_size = 200):
+   """
+   Split a dataframe into chunks
+   """
    chunks = []
    num_chunks = len(df) // chunk_size + 1
    for i in range(num_chunks):
        chunks.append(df[i * chunk_size:(i + 1) * chunk_size])
    return chunks
+

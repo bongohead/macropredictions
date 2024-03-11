@@ -25,7 +25,7 @@ def load_config(f: str, prompt_id: str, label_key: str):
 
 class TextDataset(Dataset):
     """
-    Dataset class for multiclass labeling
+    Dataset class for multiclass BERT labeling
 
     Params:
         @tokenizer: The tokenizer used to convert text into tokens.
