@@ -19,7 +19,7 @@ pg = connect_pg()
 
 ## Get Data ------------------------------------------------------------------
 local({
-
+	# TMP: IP workaround
 	varnames_map = tribble(
 		~ varname, ~ fullname,
 		'gdp', 'Real GDP',
@@ -36,7 +36,8 @@ local({
 		mutate(., fullname = str_to_lower(fullname))
 
 	html_content =
-		request('https://www.conference-board.org/research/us-forecast/us-forecast') %>%
+		request('https://www.conference-board.org/research/us-forecast') %>%
+		add_standard_headers() %>%
 		req_perform %>%
 		resp_body_html
 
