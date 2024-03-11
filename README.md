@@ -68,6 +68,21 @@ This package will be available through `library(macropredictions)`.
 
 
 ## Changelog
+
+### v3.1.0 - 2024.01
+- Fixed broken external scrapers
+- **Inflation forecasts**
+	- Added ttm curve storage
+	- Added composite einf-TIPS forecast
+- **Rate forecasts**
+	- Fixed AMERIBOR forecasts
+	- Added 10-2 spreads
+	- Added vintage date consistency verification
+	- Added real Treasury yields
+- **R helpers**
+	- Cleaned up unit tests
+	- Fixed/deprecated broken scrapers
+
 ### v3.0.0 - 2023.11
 - Migrated from previous `econforecasting-r` git repo
 - Improved the README to be usable
