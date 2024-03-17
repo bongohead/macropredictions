@@ -15,10 +15,10 @@ load_env()
 ## Load Connection Info ----------------------------------------------------------
 pg = connect_pg()
 
-releases = list()
-hist = list()
-model = list()
-models = list()
+releases <- list()
+hist <- list()
+model <- list()
+models <- list()
 
 ## Load Variable Defs ----------------------------------------------------------
 variable_params = get_query(pg, 'SELECT * FROM nowcast_model_variables')
@@ -44,9 +44,9 @@ local({
 		unlist(.) %>%
 		as_date(.)
 
-	bdates = c(old, contiguous)
+	backtest_vdates = c(old, contiguous)
 
-	bdates <<- bdates
+	backtest_vdates <<- backtest_vdates
 })
 
 # Release Data ----------------------------------------------------------
@@ -72,7 +72,7 @@ local({
 	fred_releases = list_rbind(imap(responses, function(resp, i) {
 		tibble(
 			release = pull_data[[i]]$id,
-			release_dates = as_date(map_chr(resp_body_json(resp)$release_dates, \(x) x$date))
+			date = as_date(map_chr(resp_body_json(resp)$release_dates, \(x) x$date))
 		)
 	}))
 
@@ -105,46 +105,32 @@ local({
 
 	pull_data = keep(df_to_list(variable_params), \(x) x$hist_source == 'fred')
 
-	# There is a limit on the maximum number of vintage dates pulled @ 2000
-	filter(variable_params, hist_source == 'fred') %>%
-		df_to_list	%>%
+	fred_data =
+		pull_data %>%
 		map(., \(x) c(x$hist_source_key, x$hist_source_freq)) %>%
 		get_fred_obs_with_vintage(., api_key, .obs_start = IMPORT_DATE_START, .verbose = F) %>%
-		left_join(
+		inner_join(
 			.,
-			select(input_sources, 'varname', 'hist_source_key'),
-			by = c('series_id' = 'hist_source_key'),
+			transmute(variable_params, varname, series_id = hist_source_key),
+			by = 'series_id',
 			relationship = 'many-to-one'
 		) %>%
 		select(., -series_id) %>%
 		rename(., vdate = vintage_date) %>%
 		filter(., date >= as_date(IMPORT_DATE_START), vdate >= as_date(IMPORT_DATE_START))
 
-
-
-	fred_data = list_rbind(imap(pull_data, function(x, i) {
-
-		message(str_glue('**** Pull {i}: {x$varname} {x$hist_source_key}'))
-
-		res =
-			get_fred_obs_with_vintage(
-				x$hist_source_key,
-				api_key,
-				.freq = x$hist_source_freq,
-				.return_vintages = T,
-				.obs_start = {
-					if (x$hist_source_freq == 'd') today() - days(2000)
-					else IMPORT_DATE_START
-					},
-				) %>%
-			transmute(., varname = x$varname, freq = x$hist_source_freq, date, vdate = vintage_date, value) %>%
-			filter(., date >= as_date(IMPORT_DATE_START), vdate >= as_date(IMPORT_DATE_START))
-
-		message(str_glue('**** Count: {nrow(res)}'))
-
-		return(res)
-
-		}))
+	# fred_data = list_rbind(imap(pull_data, function(x, i) {
+	#
+	# 	message(str_glue('**** Pull {i}: {x$varname} {x$hist_source_key}'))
+	#
+	# 	res =
+	# 		get_fred_obs_with_vintage(list(c(x$hist_source_key, x$hist_source_freq)), api_key) %>%
+	# 		transmute(., varname = x$varname, freq = x$hist_source_freq, date, vdate = vintage_date, value) %>%
+	# 		filter(., date >= as_date(IMPORT_DATE_START), vdate >= as_date(IMPORT_DATE_START))
+	#
+	# 	# message(str_glue('**** Count: {nrow(res)}')
+	# 	return(res)
+	# 	}))
 
 	hist$raw$fred <<- fred_data
 })
