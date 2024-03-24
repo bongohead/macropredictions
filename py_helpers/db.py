@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import os
 from tqdm import tqdm
 import sys 
+from psycopg2.extras import execute_values
 
 def load_env():
     """
@@ -26,7 +27,7 @@ def load_env():
 
 def check_env_variables(variables: list[str]):
     """
-    Validates that variables are defined in the system env.
+    Validates that variables are defined in the system env
     
     Params
         @variables: A list of variables to verify exist in the system env.
@@ -44,19 +45,19 @@ def get_postgres_query(query: str) -> pd.DataFrame:
     Get query result from Postgres
 
     Params
-        @query The query to send to the Postgres database.
+        @query: The SELECT query to send to the Postgres database.
     
     Returns
         A pandas dataframe
     """
-    check_env_variables(['DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'DB_SERVER'])
+    check_env_variables(['PG_DB', 'PG_USER', 'PG_PASS', 'PG_HOST'])
 
     engine = create_engine(
         "postgresql+psycopg2://{user}:{password}@{host}/{dbname}".format(
-           dbname = os.getenv('DB_DATABASE'),
-           user = os.getenv('DB_USERNAME'),
-           password = os.getenv('DB_PASSWORD'),
-           host = os.getenv('DB_SERVER')
+           dbname = os.getenv('PG_DB'),
+           user = os.getenv('PG_USER'),
+           password = os.getenv('PG_PASS'),
+           host = os.getenv('PG_HOST')
         )
     )
     
@@ -66,38 +67,40 @@ def get_postgres_query(query: str) -> pd.DataFrame:
     
     return res
 
-def write_postgres_df(df, tablename, append = '', split_size = 1000):
+def write_postgres_df(df: pd.DataFrame, tablename: str, append: str = '', split_size: int = 1000, verbose: bool = False):
     """
-    Write a pandas dataframe to Postgres via an INSERT query.
+    Write a pandas dataframe to Postgres via an INSERT query
 
     Params
         @df A pandas dataframe.
         @tablename The name of the Postgres table.
         @append Additional text to append to the end of the INSERT string.
+        @verbose If True, echoes the progress rate of the insert.
 
+    Returns
+        The number of rows modified.
     """
-    check_env_variables(['DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'DB_SERVER'])
+    check_env_variables(['PG_DB', 'PG_USER', 'PG_PASS', 'PG_HOST'])
 
     conn = psycopg2.connect(
-        database = os.getenv('DB_DATABASE'),
-        user = os.getenv('DB_USERNAME'),
-        password = os.getenv('DB_PASSWORD'),
-        host = os.getenv('DB_SERVER')
+        dbname = os.getenv('PG_DB'),
+        user = os.getenv('PG_USER'),
+        password = os.getenv('PG_PASS'),
+        host = os.getenv('PG_HOST')
     )
     cursor = conn.cursor()
 
     dfs = split_df(df, chunk_size = split_size)
     row_added = 0
 
-    for d in dfs:
+    for d in tqdm(dfs, disable = not verbose):
         data = [tuple(x) for x in d.to_numpy()]
         columns = ','.join(d.columns.to_list())
-        values_placeholder = ','.join(['%s' for s in range(len(d.columns.to_list()))])
         query =\
             f"""
-            INSERT INTO {tablename} ({columns}) VALUES ({values_placeholder}) {append};
+            INSERT INTO {tablename} ({columns}) VALUES %s {append};
             """ 
-        cursor.executemany(query, data)
+        execute_values(cursor, query, data)
         row_added += cursor.rowcount
         conn.commit()
 
@@ -111,27 +114,37 @@ def execute_postgres_query(query:str) -> bool:
     Execute a single Postgres query.
 
     Params
-        @tablename The name of the Postgres materialized view.
+        @query: The query to execute.
+    
+    Returns
+        1 if successful.
     """
-    check_env_variables(['DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'DB_SERVER'])
+    check_env_variables(['PG_DB', 'PG_USER', 'PG_PASS', 'PG_HOST'])
 
     conn = psycopg2.connect(
-        database = os.getenv('DB_DATABASE'),
-        user = os.getenv('DB_USERNAME'),
-        password = os.getenv('DB_PASSWORD'),
-        host = os.getenv('DB_SERVER')
+        dbname = os.getenv('PG_DB'),
+        user = os.getenv('PG_USER'),
+        password = os.getenv('PG_PASS'),
+        host = os.getenv('PG_HOST')
     )
     cursor = conn.cursor()    
-    cursor.execute(query)
+    res = cursor.execute(query)
+    conn.commit()
     cursor.close()
     conn.close()
 
-    return True
+    return 1
 
 
 def split_df(df, chunk_size = 200):
    """
-   Split a dataframe into chunks
+    Split a dataframe into chunks of a maximum size.
+
+    Params
+        @chunk_size: The size of the chunks 
+
+    Returns
+        The split dataframe.
    """
    chunks = []
    num_chunks = len(df) // chunk_size + 1
