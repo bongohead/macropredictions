@@ -61,6 +61,7 @@ async def get_prompts(
         failed_requests = [request for request, result in zip(req_prompts, results) if isinstance(result, Exception)]
     
         if failed_requests:
+            print([result for result in results if isinstance(result, Exception)])
             retry_responses = await retry_requests(failed_requests, total_retries + 1)
             successful_responses.extend(retry_responses)
     
