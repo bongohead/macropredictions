@@ -1,7 +1,6 @@
 import os
 import asyncio
 import aiohttp
-import openai
 from dotenv import load_dotenv
 from tqdm import tqdm
 

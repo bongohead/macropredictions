@@ -1,4 +1,4 @@
-from dotenv import load_dfrom typing import Callable
+from typing import Callable
 import asyncio
 import aiohttp
 from tqdm import tqdm
