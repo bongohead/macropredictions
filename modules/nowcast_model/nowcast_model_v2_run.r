@@ -94,9 +94,18 @@ local({
 	pull_data = keep(df_to_list(variable_params), \(x) x$hist_source == 'fred')
 
 	fred_data =
-		pull_data %>%
-		map(., \(x) c(x$hist_source_key, x$hist_source_freq)) %>%
-		get_fred_obs_with_vintage(., api_key, .obs_start = IMPORT_DATE_START, .verbose = F) %>%
+		# pull_data %>%
+		# map(., \(x) c(x$hist_source_key, x$hist_source_freq)) %>%
+		# get_fred_obs_with_vintage(., api_key, .obs_start = IMPORT_DATE_START, .verbose = F) %>%
+		list_rbind(imap(pull_data, function(x, i) {
+			message(str_glue('**** Pull {i}: {x$varname} {x$hist_source_key}'))
+			res =
+				get_fred_obs_with_vintage(list(c(x$hist_source_key, x$hist_source_freq)), api_key) %>%
+				transmute(., varname = x$varname, freq = x$hist_source_freq, date, vdate = vintage_date, value) %>%
+				filter(., date >= as_date(IMPORT_DATE_START), vdate >= as_date(IMPORT_DATE_START))
+			message(str_glue('**** Count: {nrow(res)}'))
+			return(res)
+		})) %>%
 		inner_join(
 			.,
 			transmute(variable_params, varname, series_id = hist_source_key),
@@ -106,19 +115,6 @@ local({
 		select(., -series_id) %>%
 		rename(., vdate = vintage_date) %>%
 		filter(., date >= as_date(IMPORT_DATE_START), vdate >= as_date(IMPORT_DATE_START))
-
-	# fred_data = list_rbind(imap(pull_data, function(x, i) {
-	#
-	# 	message(str_glue('**** Pull {i}: {x$varname} {x$hist_source_key}'))
-	#
-	# 	res =
-	# 		get_fred_obs_with_vintage(list(c(x$hist_source_key, x$hist_source_freq)), api_key) %>%
-	# 		transmute(., varname = x$varname, freq = x$hist_source_freq, date, vdate = vintage_date, value) %>%
-	# 		filter(., date >= as_date(IMPORT_DATE_START), vdate >= as_date(IMPORT_DATE_START))
-	#
-	# 	# message(str_glue('**** Count: {nrow(res)}')
-	# 	return(res)
-	# 	}))
 
 	hist$raw$fred <<- fred_data
 })
@@ -481,7 +477,7 @@ local({
 	quarters_forward = 12
 	pca_varnames = filter(variable_params, nc_dfm_input == T)$varname
 
-	results = lapply(backtest_vdates, function(this_vdate) {
+	results = map(backtest_vdates, .progress = T, function(this_vdate) {
 
 		# Get long df of all PCA variables
 		pca_variables_0 =
@@ -536,7 +532,7 @@ local({
 			)
 
 		list(
-			bdate = this_bdate,
+			vdate = this_vdate,
 			pca_variables_df = pca_variables_df,
 			big_t_dates = big_t_dates,
 			big_tau_dates = big_tau_dates,
@@ -553,7 +549,7 @@ local({
 
 
 	for (x in results) {
-		models[[as.character(x$bdate)]] <<- x
+		models[[as.character(x$vdate)]] <<- x
 	}
 	model$quarters_forward <<- quarters_forward
 	model$pca_varnames <<- pca_varnames
@@ -565,9 +561,9 @@ local({
 
 	message(str_glue('*** Extracting PCA Factors | {format(now(), "%H:%M")}'))
 
-	results = lapply(bdates, function(this_bdate) {
+	results = map(backtest_vdates, .progress = T, function(this_vdate) {
 
-		m = models[[as.character(this_bdate)]]
+		m = models[[as.character(this_vdate)]]
 
 		xDf = filter(m$pca_variables_df, date %in% m$big_t_dates)
 
@@ -631,7 +627,7 @@ local({
 				)
 
 		# 2 factors needed since 1 now represents COVID shock
-		big_r = 2
+		big_r = 1
 			# screeDf %>%
 			# filter(., ic1 == min(ic1)) %>%
 			# .$factors #+ 2
@@ -678,7 +674,7 @@ local({
 			select(., paste0('f', 1:big_r))
 
 		list(
-			bdate = this_bdate,
+			vdate = this_vdate,
 			factor_weights_df = factor_weights_df,
 			scree_df = screeDf,
 			scree_plot = screePlot,
@@ -690,13 +686,13 @@ local({
 	})
 
 	for (x in results) {
-		models[[as.character(x$bdate)]]$factor_weights_df <<- x$factor_weights_df
-		models[[as.character(x$bdate)]]$scree_df <<- x$scree_df
-		models[[as.character(x$bdate)]]$scree_plot <<- x$scree_plot
-		models[[as.character(x$bdate)]]$big_r <<- x$big_r
-		models[[as.character(x$bdate)]]$pca_input_df <<- x$pca_input_df
-		models[[as.character(x$bdate)]]$z_df <<- x$z_df
-		models[[as.character(x$bdate)]]$z_plots <<- x$z_plots
+		models[[as.character(x$vdate)]]$factor_weights_df <<- x$factor_weights_df
+		models[[as.character(x$vdate)]]$scree_df <<- x$scree_df
+		models[[as.character(x$vdate)]]$scree_plot <<- x$scree_plot
+		models[[as.character(x$vdate)]]$big_r <<- x$big_r
+		models[[as.character(x$vdate)]]$pca_input_df <<- x$pca_input_df
+		models[[as.character(x$vdate)]]$z_df <<- x$z_df
+		models[[as.character(x$vdate)]]$z_plots <<- x$z_plots
 	}
 })
 
@@ -705,9 +701,9 @@ local({
 
 	message('*** Running VAR(1)')
 
-	results = lapply(bdates, function(this_bdate) {
+	results = map(backtest_vdates, function(this_vdate) {
 
-		m = models[[as.character(this_bdate)]]
+		m = models[[as.character(this_vdate)]]
 
 		input_df = na.omit(inner_join(m$z_df, add_lagged_columns(m$z_df, max_lag = 1), by = 'date'))
 
@@ -755,7 +751,7 @@ local({
 				ggplot(x) +
 					geom_line(
 						aes(x = date, y = value, group = type, linetype = type, color = type),
-						size = 1, alpha = 1.0
+						linewidth = 1, alpha = 1.0
 					) +
 					labs(
 						x = NULL, y = NULL, color = NULL, linetype = NULL,
@@ -776,7 +772,7 @@ local({
 				{reduce(., function(x, y) x + y)/length(.)}
 
 			list(
-				bdate = this_bdate,
+				vdate = this_vdate,
 				var_fitted_plots = fitted_plots,
 				var_resid_plots = resid_plot,
 				var_gof_df = gof_df,
@@ -788,13 +784,13 @@ local({
 		})
 
 	for (x in results) {
-		models[[as.character(x$bdate)]]$var_fitted_plots <<- x$var_fitted_plots
-		models[[as.character(x$bdate)]]$var_resid_plots <<- x$var_resid_plots
-		models[[as.character(x$bdate)]]$var_gof_df <<- x$var_gof_df
-		models[[as.character(x$bdate)]]$var_coef_df <<- x$var_coef_df
-		models[[as.character(x$bdate)]]$q_mat <<- x$q_mat
-		models[[as.character(x$bdate)]]$b_mat <<- x$b_mat
-		models[[as.character(x$bdate)]]$c_mat <<- x$c_mat
+		models[[as.character(x$vdate)]]$var_fitted_plots <<- x$var_fitted_plots
+		models[[as.character(x$vdate)]]$var_resid_plots <<- x$var_resid_plots
+		models[[as.character(x$vdate)]]$var_gof_df <<- x$var_gof_df
+		models[[as.character(x$vdate)]]$var_coef_df <<- x$var_coef_df
+		models[[as.character(x$vdate)]]$q_mat <<- x$q_mat
+		models[[as.character(x$vdate)]]$b_mat <<- x$b_mat
+		models[[as.character(x$vdate)]]$c_mat <<- x$c_mat
 	}
 })
 
@@ -803,9 +799,9 @@ local({
 
 	message('*** Running DFM')
 
-	results = lapply(bdates, function(this_bdate) {
+	results = map(backtest_vdates, .progress = T, function(this_vdate) {
 
-		m = models[[as.character(this_bdate)]]
+		m = models[[as.character(this_vdate)]]
 
 		y_mat = as.matrix(select(m$pca_input_df, -date))
 		x_df = bind_cols(constant = 1, select(m$z_df, -date))
@@ -875,7 +871,7 @@ local({
 			lapply(., function(x) diag(x))
 
 		list(
-			bdate = this_bdate,
+			vdate = this_vdate,
 			dfm_gof_df = gof_df,
 			dfm_coef_df = coef_df,
 			dfm_fitted_plots = fitted_plots,
@@ -901,7 +897,7 @@ local({
 	message('*** Running Kalman Filter')
 	gc()
 
-	results = lapply(bdates, function(this_bdate) {
+	results = lapply(backtest_vdates, function(this_bdate) {
 
 		# message(str_glue('***** Running KF {this_bdate}'))
 		m = models[[as.character(this_bdate)]]
