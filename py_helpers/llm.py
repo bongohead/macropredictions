@@ -1,10 +1,10 @@
 import os
 import asyncio
 import aiohttp
-from dotenv import load_dotenv
+from env import load_env 
 from tqdm import tqdm
 
-load_dotenv()
+load_env()
 
 async def get_prompts(
 	prompts: list[list],
@@ -38,17 +38,15 @@ async def get_prompts(
     """
 
     async def make_request(session, prompt: list):
-		
         url = 'https://api.openai.com/v1/chat/completions'
         headers = {"Authorization": "Bearer " + api_key}
-        
         async with session.post(url, headers = headers, json = {**{'messages': prompt}, **params}) as response:
             return await response.json()
             
     async def retry_requests(req_prompts, total_retries = 0):
-    	
         if total_retries > max_retries:
             raise Exception('Requests failed')
+        
         if total_retries > 0:
             print(f'Retry {total_retries} for {len(req_prompts)} failed requests')
             await asyncio.sleep(2 * 2 ** total_retries) # Backoff rate 

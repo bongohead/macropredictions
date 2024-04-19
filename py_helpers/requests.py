@@ -14,31 +14,29 @@ async def send_async_requests(inputs: list[dict], request_generator: Callable, b
     Example:
         # Example 1: GET request returning JSON
         async def req_gen(session, input):
-            url = 'https://jmdv.sandbox.indeed.net/api/jobs/' + input['jobkey'] + '/'
-            headers = {'Content-Type': 'application/json'}
-            async with session.get(url, headers = headers) as response:
-                return await response.json(content_type='text/html')
-                
+            url = 'https://httpbin.org/get?test_param=/' + input['test_param'] + '/'
+            async with session.get(url) as response:
+                return await response.json()
+
         res = await send_async_requests(
-            inputs = [{"jobkey": "8866999381"}],
+            inputs = [{"test_param": "1"}, {"test_param": "2"}],
             request_generator = req_gen
         )
 
         # Example 2: POST request returning JSON
         async def req_gen(session, input):
-            url = 'https://llm-proxy.sandbox.indeed.net/openai/v1/chat/completions'
-            headers = {
-                "Authorization": "Bearer " + api_key,
-                "OpenAI-Organization": 'org-SFf9IpnK1hAwQf3Aq1oa7k90',   
-            }
-            async with session.post(url, headers = headers, json = {'messages': input['prompt']}, 'model': 'gpt-3.5-turbo'}) as response:
+            url = 'https://httpbin.org/post'
+            headers = {'Content-Type': 'application/json'}
+            async with session.post(url, headers = headers, json = input) as response:
                 return await response.json()
                 
         res = await send_async_requests(
-            inputs = [{"prompt": [...]}, {"prompt": [...]}] 
+            inputs = [{"test_param": "1"}, {"test_param": "2"}], 
             request_generator = req_gen
         )
 
+    Returns:
+        A list where each element is the returned element of the request generator
     """
     async def retry_requests(req_prompts, total_retries = 0):
         if total_retries > max_retries:
