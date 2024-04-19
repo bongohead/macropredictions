@@ -4,7 +4,7 @@ import pandas as pd
 import os
 from tqdm import tqdm
 from psycopg2.extras import execute_values
-from env import load_env, check_env_variables
+from py_helpers.env import load_env, check_env_variables
 
 def get_postgres_query(query: str) -> pd.DataFrame: 
     """
@@ -16,14 +16,15 @@ def get_postgres_query(query: str) -> pd.DataFrame:
     Returns
         A pandas dataframe
     """
-    check_env_variables(['PG_DB', 'PG_USER', 'PG_PASS', 'PG_HOST'])
+    check_env_variables(['DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'DB_SERVER', 'DB_PORT'])
 
     engine = create_engine(
-        "postgresql+psycopg2://{user}:{password}@{host}/{dbname}".format(
-           dbname = os.getenv('PG_DB'),
-           user = os.getenv('PG_USER'),
-           password = os.getenv('PG_PASS'),
-           host = os.getenv('PG_HOST')
+        "postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}".format(
+           dbname = os.getenv('DB_DATABASE'),
+           user = os.getenv('DB_USERNAME'),
+           password = os.getenv('DB_PASSWORD'),
+           host = os.getenv('DB_SERVER'),
+           port = os.getenv('DB_PORT')
         )
     )
     
@@ -46,13 +47,14 @@ def write_postgres_df(df: pd.DataFrame, tablename: str, append: str = '', split_
     Returns
         The number of rows modified.
     """
-    check_env_variables(['PG_DB', 'PG_USER', 'PG_PASS', 'PG_HOST'])
+    check_env_variables(['DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'DB_SERVER', 'DB_PORT'])
 
     conn = psycopg2.connect(
-        dbname = os.getenv('PG_DB'),
-        user = os.getenv('PG_USER'),
-        password = os.getenv('PG_PASS'),
-        host = os.getenv('PG_HOST')
+        dbname = os.getenv('DB_DATABASE'),
+        user = os.getenv('DB_USERNAME'),
+        password = os.getenv('DB_PASSWORD'),
+        host = os.getenv('DB_SERVER'),
+        port = os.getenv('DB_PORT')
     )
     cursor = conn.cursor()
 
@@ -85,13 +87,14 @@ def execute_postgres_query(query:str) -> bool:
     Returns
         1 if successful.
     """
-    check_env_variables(['PG_DB', 'PG_USER', 'PG_PASS', 'PG_HOST'])
+    check_env_variables(['DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'DB_SERVER', 'DB_PORT'])
 
     conn = psycopg2.connect(
-        dbname = os.getenv('PG_DB'),
-        user = os.getenv('PG_USER'),
-        password = os.getenv('PG_PASS'),
-        host = os.getenv('PG_HOST')
+        dbname = os.getenv('DB_DATABASE'),
+        user = os.getenv('DB_USERNAME'),
+        password = os.getenv('DB_PASSWORD'),
+        host = os.getenv('DB_SERVER'),
+        port = os.getenv('DB_PORT')
     )
     cursor = conn.cursor()    
     res = cursor.execute(query)

@@ -20,7 +20,8 @@ from PIL import Image
 import requests
 from bs4 import BeautifulSoup
 
-from py_helpers.db import load_env, get_postgres_query, write_postgres_df, execute_postgres_query
+from py_helpers.env import load_env
+from py_helpers.pg import get_postgres_query, write_postgres_df, execute_postgres_query
 from py_helpers.ocr.easyocr import easyocr_to_df, draw_easyocr_output, get_bb_darkness
 
 load_env()
