@@ -88,9 +88,24 @@ local({
 ## BLOOM  ----------------------------------------------------------
 local({
 
-	request('https://www.bloomberg.com') %>%
-		add_standard_headers %>%
-		req_perform
+	# Note: fingerprinting is heavily UA based
+	r1 =
+		request('https://www.bloomberg.com') %>%
+		list_merge(., headers = list(
+			'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0'
+		)) %>%
+		req_perform()
+
+	if (str_detect(resp_body_string(r1), 'Are you a robot?')) stop(paste0('Bot detection - ', r1$url))
+
+	r1_cookies =
+		r1 %>%
+		resp_headers() %>%
+		imap(., \(x, i) if (i == 'set-cookie') str_extract(x, '^[^;]*;') else NULL) %>%
+		compact %>%
+		unlist() %>%
+		paste0(., collapse = ' ')
+
 
 	bloom_data =
 		filter(input_sources, hist_source == 'bloom') %>%
@@ -106,13 +121,9 @@ local({
 				req %>%
 				req_headers(
 					'Host' = 'www.bloomberg.com',
-					# 'Referer' = str_glue('https://www.bloomberg.com/quote/{x$source_key}:IND'),
-					'Accept' = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-					`User-Agent` = paste0(
-						'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ',
-						'(KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
-						),
-					) %>%
+					'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0',
+					'Cookie' = r1_cookies
+				) %>%
 				req_retry(max_tries = 5) %>%
 				req_perform %>%
 				resp_body_json %>%
