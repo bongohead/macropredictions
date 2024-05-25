@@ -156,18 +156,39 @@ local({
 
 	message(str_glue('*** Importing Bloom Data | {format(now(), "%H:%M")}'))
 
+	# Note: fingerprinting is heavily UA based
+	r1 =
+		request('https://www.bloomberg.com') %>%
+		list_merge(., headers = list(
+			'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0'
+		)) %>%
+		req_perform()
+
+	if (str_detect(resp_body_string(r1), 'Are you a robot?')) stop(paste0('Bot detection - ', r1$url))
+
+	r1_cookies =
+		r1 %>%
+		resp_headers() %>%
+		imap(., \(x, i) if (i == 'set-cookie') str_extract(x, '^[^;]*;') else NULL) %>%
+		compact %>%
+		unlist() %>%
+		paste0(., collapse = ' ')
+
+
 	bloom_data = list_rbind(map(df_to_list(filter(variable_params, hist_source == 'bloom')), function(x) {
 
+		url = paste0(
+			'https://www.bloomberg.com/markets2/api/history/', x$hist_source_key, '%3AIND/PX_LAST?',
+			'timeframe=5_YEAR&period=daily&volumePeriod=daily'
+		)
+
 		res =
-			request(paste0(
-				'https://www.bloomberg.com/markets2/api/history/', x$hist_source_key, '%3AIND/PX_LAST?',
-				'timeframe=5_YEAR&period=daily&volumePeriod=daily'
-			)) %>%
-			# add_standard_headers %>%
+			request(url) %>%
 			list_merge(., headers = list(
 				'Host' = 'www.bloomberg.com',
+				'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0',
 				'Referer' = str_glue('https://www.bloomberg.com/quote/{x$source_key}:IND'),
-				'User-Agent' = 'PostmanRuntime/7.32.2'
+				'Cookie' = r1_cookies
 				)) %>%
 			req_perform %>%
 			resp_body_json %>%
@@ -186,7 +207,7 @@ local({
 			na.omit
 
 		# Add sleep due to bot detection
-		Sys.sleep(runif(1, 5, 10))
+		Sys.sleep(rnorm(3, 20, 5))
 
 		return(res)
 	}))
@@ -621,7 +642,7 @@ local({
 		map(., function(x) {
 			if (x$transform[[1]] == 'base') x %>% mutate(., value = value_0)
 			else if (x$transform[[1]] == 'log') x %>% mutate(., value = log(value_0))
-			else if (x$transform[[1]] == 'dlog') x %>% mutate(., value = dlog(value_0/value_l))
+			else if (x$transform[[1]] == 'dlog') x %>% mutate(., value = log(value_0/value_l))
 			else if (x$transform[[1]] == 'diff1') x %>% mutate(., value = value_0 - value_l)
 			else if (x$transform[[1]] == 'pchg') x %>% mutate(., value = (value_0/value_l - 1) * 100)
 			else if (x$transform[[1]] == 'apchg') x %>% mutate(., value = ((value_0/value_l)^ifelse(freq == 'q', 4, 12) - 1) * 100)
