@@ -106,7 +106,6 @@ local({
 		unlist() %>%
 		paste0(., collapse = ' ')
 
-
 	bloom_data =
 		filter(input_sources, hist_source == 'bloom') %>%
 		df_to_list	%>%
@@ -125,7 +124,12 @@ local({
 					'Cookie' = r1_cookies
 				) %>%
 				req_retry(max_tries = 5) %>%
-				req_perform %>%
+				req_perform
+
+			if (str_detect(resp_body_string(r1), 'Are you a robot?')) stop(paste0('Bot detection - ', r1$url))
+
+			clean =
+				res %>%
 				resp_body_json %>%
 				.[[1]] %>%
 				.$price %>%
@@ -141,9 +145,9 @@ local({
 					) %>%
 				na.omit
 
-			Sys.sleep(runif(10, 10, 20))
+			Sys.sleep(max(10, rnorm(1, 30, 10)))
 
-			return(res)
+			return(clean)
 		}) %>%
 		list_rbind
 
