@@ -48,6 +48,7 @@ get_fred_obs = function(pull_ids, api_key, .obs_start = '2000-01-01', .verbose =
 				'&file_type=json'
 			) %>%
 			request() %>%
+			req_retry(max_tries = 10, backoff = function(i) 30) %>%
 			req_error(., body = function(resp) {
 				print(resp)
 				return(resp_body_string(resp))
@@ -74,6 +75,7 @@ get_fred_obs = function(pull_ids, api_key, .obs_start = '2000-01-01', .verbose =
 				'&aggregation_method=avg'
 			)) %>%
 			req_timeout(., 8000) %>%
+			req_retry(max_tries = 10, backoff = function(i) 30) %>%
 			req_error(., body = function(resp) {
 				print(resp)
 				return(resp_body_string(resp))
