@@ -96,7 +96,11 @@ local({
 		)) %>%
 		req_perform()
 
-	if (str_detect(resp_body_string(r1), 'Are you a robot?')) stop(paste0('Bot detection - ', r1$url))
+	if (str_detect(resp_body_string(r1), 'Are you a robot?')) {
+		message(paste0('Bot detection - ', r1$url))
+		hist$bloom <<- tibble()
+		return()
+	}
 
 	r1_cookies =
 		r1 %>%
@@ -296,8 +300,9 @@ local({
 	))
 
 	# Want to create a dataframe with months out starting at 0 and until max available data (or 120 for ffr)
+	# 5/28 - BSBY removed from below line
 	raw_data =
-		expand_grid(vdate = backtest_vdates, varname = c('bsby', 'ffr', 'sofr'), months_out = 0:120) %>%
+		expand_grid(vdate = backtest_vdates, varname = c('ffr', 'sofr'), months_out = 0:120) %>%
 		mutate(., date = floor_date(vdate, 'month') %m+% months(months_out), min_tradedate = vdate - days(7)) %>%
 		left_join(
 			.,
