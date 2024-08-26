@@ -1,6 +1,6 @@
 #%% 
 import os
-from py_helpers.db import load_env
+from py_helpers.env import load_env
 validation_log = {}
 load_env()
 
