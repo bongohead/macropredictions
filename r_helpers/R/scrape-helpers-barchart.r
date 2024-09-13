@@ -71,7 +71,7 @@ get_barchart_data = function(codes, .verbose = T) {
 
 		http_response =
 			request(paste0(
-				'https://www.barchart.com/proxies/timeseries/queryeod.ashx?',
+				'https://www.barchart.com/proxies/timeseries/historical/queryeod.ashx?',
 				'symbol=', code, '&data=daily&maxrecords=640&volume=contract&order=asc',
 				'&dividends=false&backadjust=false&daystoexpiration=1&contractroll=expiration'
 			)) %>%

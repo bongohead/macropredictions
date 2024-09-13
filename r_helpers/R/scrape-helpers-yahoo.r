@@ -1,4 +1,4 @@
-#' Get data from Yahoo finance
+#' Get data from Yahoo finance `r lifecycle::badge("superseded")`
 #'
 #' @param tickers Tickers to pass into Yahoo Finance
 #' @param start_date A start date
@@ -8,11 +8,11 @@
 #' @importFrom data.table fread
 #'
 #' @examples \dontrun{
-#'  get_yahoo_data('^VIX')
+#'  get_yahoo_data_old('^VIX')
 #' }
 #'
 #' @export
-get_yahoo_data = function(tickers, .obs_start = '2000-01-01') {
+get_yahoo_data_old = function(tickers, .obs_start = '2000-01-01') {
 
 	stopifnot(
 		is_character(tickers),
@@ -40,3 +40,56 @@ get_yahoo_data = function(tickers, .obs_start = '2000-01-01') {
 
 }
 
+#' Get data from Yahoo finance `r lifecycle::badge("superseded")`
+#'
+#' @param tickers Tickers to pass into Yahoo Finance
+#' @param start_date A start date
+#'
+#' @import dplyr purrr httr2
+#' @importFrom lubridate as_date today days
+#'
+#' @examples \dontrun{
+#'  get_yahoo_data('^VIX')
+#' }
+#'
+#' @export
+get_yahoo_data = function(tickers, .obs_start = '2000-01-01') {
+
+	stopifnot(
+		is_character(tickers),
+		is.Date(.obs_start) || is_scalar_character(.obs_start)
+	)
+
+	list_rbind(map(tickers, function(ticker) {
+
+		url = paste0(
+			'https://query1.finance.yahoo.com/v8/finance/chart/', ticker,
+			'?formatted=true',
+			'&includeAdjustedClose=true',
+			'&period1=', as.numeric(as.POSIXct(as_date(.obs_start))),
+			'&period2=', as.numeric(as.POSIXct(today() + days(1))),
+			'&interval=1d',
+			'&symbol=', ticker,
+			'&userYfid=true&lang=en-US&region=US'
+		)
+
+		response_parsed =
+			request(url) %>%
+			req_perform() %>%
+			resp_body_json()
+
+		tibble(
+			date = unlist(response_parsed$chart$result[[1]]$timestamp),
+			# Handle empty values in the JSON response
+			value =
+				response_parsed$chart$result[[1]]$indicators$adjclose[[1]]$adjclose %>%
+				map(., \(x) if(length(x) == 1) x else 'null') %>%
+				unlist()
+			) %>%
+			mutate(date = as_date(as_datetime(date))) %>%
+			filter(., value != 'null') %>%
+			arrange(date) %>%
+			mutate(., ticker = ticker, value = as.numeric(value))
+	}))
+
+}
