@@ -66,12 +66,14 @@ get_yahoo_data = function(tickers, .obs_start = '2000-01-01') {
 			'https://query1.finance.yahoo.com/v8/finance/chart/', ticker,
 			'?formatted=true',
 			'&includeAdjustedClose=true',
-			'&period1=', as.numeric(as.POSIXct(as_date(.obs_start))),
-			'&period2=', as.numeric(as.POSIXct(today() + days(1))),
+			'&period1=', format(as.numeric(as.POSIXct(as_date(.obs_start))), scientific = F),
+			'&period2=', format(as.numeric(as.POSIXct(today() + days(1))), scientific = F),
 			'&interval=1d',
 			'&symbol=', ticker,
 			'&userYfid=true&lang=en-US&region=US'
 		)
+
+		print(url)
 
 		response_parsed =
 			request(url) %>%
