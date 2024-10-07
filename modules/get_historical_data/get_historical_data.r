@@ -156,15 +156,20 @@ local({
 
 	message(str_glue('*** Importing Bloom Data | {format(now(), "%H:%M")}'))
 
-	# Note: fingerprinting is heavily UA based
+	# Note: fingerprinting is heavily UA based3
 	r1 =
 		request('https://www.bloomberg.com') %>%
+		add_standard_headers() %>%
 		list_merge(., headers = list(
-			'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0'
+			'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0'
 		)) %>%
 		req_perform()
 
-	if (str_detect(resp_body_string(r1), 'Are you a robot?')) stop(paste0('Bot detection - ', r1$url))
+	if (str_detect(resp_body_string(r1), 'Are you a robot?')) {
+		message(paste0('Bot detection - ', r1$url))
+		hist$raw$bloom <<- tibble()
+		return()
+	}
 
 	r1_cookies =
 		r1 %>%
@@ -173,7 +178,6 @@ local({
 		compact %>%
 		unlist() %>%
 		paste0(., collapse = ' ')
-
 
 	bloom_data = list_rbind(map(df_to_list(filter(variable_params, hist_source == 'bloom')), function(x) {
 
@@ -186,11 +190,17 @@ local({
 			request(url) %>%
 			list_merge(., headers = list(
 				'Host' = 'www.bloomberg.com',
-				'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0',
-				'Referer' = str_glue('https://www.bloomberg.com/quote/{x$source_key}:IND'),
+				'Sec-Ch-Ua-Platform' = 'Windows',
+				'Accept' = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+				'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0',
 				'Cookie' = r1_cookies
 				)) %>%
-			req_perform %>%
+			req_perform
+
+		if (str_detect(resp_body_string(res), 'Are you a robot?')) stop(paste0('Bot detection - ', res$url))
+
+		clean =
+			res %>%
 			resp_body_json %>%
 			.[[1]] %>%
 			.$price %>%
@@ -207,9 +217,9 @@ local({
 			na.omit
 
 		# Add sleep due to bot detection
-		Sys.sleep(rnorm(3, 20, 5))
+		Sys.sleep(max(10, rnorm(1, 30, 10)))
 
-		return(res)
+		return(clean)
 	}))
 
 	hist$raw$bloom <<- bloom_data
@@ -474,7 +484,7 @@ local({
 			filter(hist$raw$fred, !varname %in% unique(.$varname)),
 			filter(hist$raw$treas, !varname %in% unique(.$varname)),
 			filter(hist$raw$yahoo, !varname %in% unique(.$varname)),
-			filter(hist$raw$bloom, !varname %in% unique(.$varname)),
+			# filter(hist$raw$bloom, !varname %in% unique(.$varname)),
 			filter(hist$raw$afx, !varname %in% unique(.$varname)),
 			filter(hist$raw$ecb, !varname %in% unique(.$varname)),
 			filter(hist$raw$boe, !varname %in% unique(.$varname))

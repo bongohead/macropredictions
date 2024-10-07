@@ -11,6 +11,9 @@ This codebase is primarily created for internal model development, and large par
 <details>
 <summary><i>For internal users</i></summary>
 Please see the wiki pages on [server maintenance](https://wiki.macropredictions.com/books/system-overview/page/server-administration) to setup your dev environment and access GUI interfaces. See [data flow structure](https://wiki.macropredictions.com/books/system-overview/page/data-flow-structure) to understand the data flow between models and data stores.
+
+![https://wiki.macropredictions.com/uploads/images/drawio/2024-05/drawing-6-1716139967.png]
+![https://wiki.macropredictions.com/uploads/images/drawio/2024-09/drawing-6-1726655178.png]
 </details>
 
 
@@ -69,7 +72,7 @@ This package will be available through `library(macropredictions)`.
 
 ## Changelog
 
-### v3.1.0 - 2024.01
+### v3.1.0 - 2024.06
 - Fixed broken external scrapers
 - **Inflation forecasts**
 	- Added ttm curve storage

@@ -54,10 +54,11 @@ local({
 		dmy()
 
 	iframe_src =
-		html_content %>%
-		html_element(., 'iframe[data-external]') %>%
-		html_attr(., 'src') %>%
-		str_extract(., "https://datawrapper.dwcdn.net/(.*?)/") # strip off version numbers
+		# html_content %>%
+		# html_element(., 'iframe[data-external]') %>%
+		# html_attr(., 'src') %>%
+		# str_extract(., "https://datawrapper.dwcdn.net/(.*?)/") # strip off version numbers
+		'https://datawrapper.dwcdn.net/AcRcv'
 
 	# Redirect page
 	redirect_src =
