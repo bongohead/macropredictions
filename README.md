@@ -59,10 +59,10 @@ This package will be available through `library(macropredictions)`.
 Please see the wiki pages on [server maintenance](https://wiki.macropredictions.com/books/system-overview/page/server-administration) to setup your dev environment and access GUI interfaces. See [data flow structure](https://wiki.macropredictions.com/books/system-overview/page/data-flow-structure) to understand the data flow between models and data stores.
 
 Database Structure:
-![Database](https://wiki.macropredictions.com/uploads/images/drawio/2024-05/drawing-6-1716139967.png)
+![Database](./docs/db.png)
 
 Server Structure:
-![Server 2](https://wiki.macropredictions.com/uploads/images/drawio/2024-09/drawing-6-1726655178.png)
+![Server 2](./docs/server.png)
 
 
 ## Usage
