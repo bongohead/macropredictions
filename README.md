@@ -8,14 +8,6 @@ This code contains the data aggregation & modeling code used for forecasting and
 
 This codebase is primarily created for internal model development, and large parts of it are reliant on being able to connect to internal database and logging systems. However, external users can still adapt most scripts for their own use cases, though it will be necessary to modify any code which relies on calls to internal data sources or files.
 
-<details>
-<summary><i>For internal users</i></summary>
-Please see the wiki pages on [server maintenance](https://wiki.macropredictions.com/books/system-overview/page/server-administration) to setup your dev environment and access GUI interfaces. See [data flow structure](https://wiki.macropredictions.com/books/system-overview/page/data-flow-structure) to understand the data flow between models and data stores.
-
-![https://wiki.macropredictions.com/uploads/images/drawio/2024-05/drawing-6-1716139967.png]
-![https://wiki.macropredictions.com/uploads/images/drawio/2024-09/drawing-6-1726655178.png]
-</details>
-
 
 
 ## Setup
@@ -61,6 +53,16 @@ You can test this by launching R and verifying that `Sys.getenv('MP_DIR')` retur
 	install.packages(file.path(Sys.getenv('MP_DIR'), 'r_helpers'), repos = NULL, type = 'source')
 	```
 This package will be available through `library(macropredictions)`.
+
+
+## For internal users
+Please see the wiki pages on [server maintenance](https://wiki.macropredictions.com/books/system-overview/page/server-administration) to setup your dev environment and access GUI interfaces. See [data flow structure](https://wiki.macropredictions.com/books/system-overview/page/data-flow-structure) to understand the data flow between models and data stores.
+
+Database Structure:
+![Database](https://wiki.macropredictions.com/uploads/images/drawio/2024-05/drawing-6-1716139967.png)
+
+Server Structure:
+![Server 2](https://wiki.macropredictions.com/uploads/images/drawio/2024-09/drawing-6-1726655178.png)
 
 
 ## Usage
