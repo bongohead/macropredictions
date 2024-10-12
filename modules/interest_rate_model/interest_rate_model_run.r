@@ -36,7 +36,7 @@ input_sources = get_query(pg, 'SELECT * FROM interest_rate_model_variables')
 ## FRED ----------------------------------------------------------
 local({
 
-	# Get historical data with latest release date
+	# Get historical data with latest release date+
 	# Note that only a single vintage date is pulled (last available value for each data point).
 	# This assumes for rate historical data there are no revisions
 	message('***** Importing FRED Data')

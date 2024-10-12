@@ -3,7 +3,7 @@
 Rplots.pdf
 **.Rd
 .Renviron
-docs
+# docs
 
 # Python
 .venv/
