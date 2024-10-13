@@ -38,7 +38,12 @@ local({
 		'2023-01-15', 'https://s.wsj.net/public/resources/documents/wsjecon0123.xlsx',
 		'2023-04-23', 'https://s.wsj.net/public/resources/documents/wsjecon0423.xlsx',
 		'2023-07-15', 'https://s.wsj.net/public/resources/documents/wsjecon0723.xlsx',
-		'2023-10-26', 'https://s.wsj.net/public/resources/documents/wsjecon1023.xlsx'
+		'2023-10-26', 'https://s.wsj.net/public/resources/documents/wsjecon1023.xlsx',
+		'2024-01-14', 'https://s.wsj.net/public/resources/documents/wsjecon0124.xlsx',
+		'2024-04-14', 'https://s.wsj.net/public/resources/documents/wsjecon0424.xlsx',
+		'2024-07-11', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0724.xlsx',
+		'2024-10-14', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon1024.xlsx'
+
 	)
 
 	orgs_to_retain <<- orgs_to_retain
