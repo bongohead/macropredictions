@@ -40,10 +40,11 @@ get_yahoo_data_old = function(tickers, .obs_start = '2000-01-01') {
 
 }
 
-#' Get data from Yahoo finance `r lifecycle::badge("superseded")`
+#' Get data from Yahoo finance
 #'
 #' @param tickers Tickers to pass into Yahoo Finance
-#' @param start_date A start date
+#' @param .obs_start The start date in YYYY-MM-DD format; 2000-01-01 by default
+#' @param .verbose Echo URL if true
 #'
 #' @import dplyr purrr httr2
 #' @importFrom lubridate as_date today days
@@ -53,7 +54,7 @@ get_yahoo_data_old = function(tickers, .obs_start = '2000-01-01') {
 #' }
 #'
 #' @export
-get_yahoo_data = function(tickers, .obs_start = '2000-01-01') {
+get_yahoo_data = function(tickers, .obs_start = '2000-01-01', .verbose = F) {
 
 	stopifnot(
 		is_character(tickers),
@@ -73,7 +74,7 @@ get_yahoo_data = function(tickers, .obs_start = '2000-01-01') {
 			'&userYfid=true&lang=en-US&region=US'
 		)
 
-		print(url)
+		if (.verbose) print(url)
 
 		response_parsed =
 			request(url) %>%
