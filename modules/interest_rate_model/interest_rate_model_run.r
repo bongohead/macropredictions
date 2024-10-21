@@ -231,13 +231,17 @@ local({
 ## Yahoo -----------------------------------------------------------
 local({
 
-	obs =
+	sp500 =
 		get_yahoo_data('^GSPC') %>%
 		mutate(., value = (value/dplyr::lag(value, 90) - 1) * 100) %>%
 		na.omit() %>%
 		transmute(., vdate = date + days(1), varname = 'sp500tr', date = date, freq = 'd', value)
 
-	hist$yahoo <<- obs
+	vix =
+		get_yahoo_data('^VIX') %>%
+		transmute(., vdate = date + days(1), varname = 'vix', date = date, freq = 'd', value)
+
+	hist$yahoo <<- bind_rows(sp500, vix)
 })
 
 ## Store in SQL ----------------------------------------------------------
@@ -1144,7 +1148,7 @@ local({
 		bind_rows(spf_1, spf_2) %>%
 		mutate(., date = add_with_rollback(floor_date(date, 'quarter'), months(1)))
 
-	# TPs
+	# Compare to ACM TPs
 	# request('https://www.newyorkfed.org/medialibrary/media/research/data_indicators/ACMTermPremium.xls') %>%
 	# 	req_perform(., path = file.path(tempdir(), 'acm.xls'))
 	#
@@ -1199,6 +1203,7 @@ local({
 	print(tps_by_block_plot)
 
 	sp500 = filter(hist$yahoo, varname == 'sp500tr') %>% rename(., sp500 = value)
+	vix = filter(hist$yahoo, varname == 'vix') %>% rename(., vix = value)
 
 	ffr_forecasts = transmute(tdns$rf_annualized, vdate, months_out, ffr_forecast = value)
 
@@ -1219,16 +1224,17 @@ local({
 					join_by(months_ahead_start == months_out, closest(spf_vdate >= vdate))
 					) %>%
 				inner_join(sp500, join_by(closest(spf_vdate >= vdate))) %>%
+				inner_join(vix, join_by(closest(spf_vdate >= vdate))) %>%
 				mutate(
 					.,
 					logttm = ttm ^ .0609 - 1,
-					logttm_int = months_ahead_start * logttm,
-					logttm_int_2 = months_ahead_start^.5 * logttm,
-					tdns1_int = tdns1 * months_ahead_start,
+					logttm_int = (months_ahead_start) * logttm,
+					logttm_int_2 = (months_ahead_start)^.5 * logttm,
+					tdns1_int = tdns1 * months_ahead_start^.5, # log(months_head_start + 1)
 					tdns1_int2 = tdns1 * logttm,
 					forecast_diff = ffr_forecast - tdns1,
 					forecast_diff_int = forecast_diff * months_ahead_start
-					)
+				)
 
 			if (nrow(input_df) <= 30) return(NULL)
 
@@ -1238,6 +1244,7 @@ local({
 				'sp500',
 				'forecast_diff', 'forecast_diff_int'
 				)
+
 			x_in = input_df %>% select(all_of(covs)) %>% as.matrix(.)
 
 			cv = glmnet::cv.glmnet(
@@ -1259,14 +1266,14 @@ local({
 				weights = .9 ^ (interval(floor_date(input_df$spf_vdate, 'month'), df$spf_vdate[[1]]) %/% months(1))
 			)
 
-			# reg =
-			# 	lm(
-			# 		monthly_tp ~ logttm +
-			# 			logttm_int + tdns1 + tdns1_int + tdns1_int2 + tdns2 + tdns3 + sp500 + ffr_forecast,
-			# 		data = input_df
-			# 		)
-			#
-			# reg %>% summary(.)
+			test_reg = lm(
+				monthly_tp ~ logttm + logttm_int +
+					tdns1 + tdns1_int + tdns1_int2 + tdns2 + tdns3 +
+					sp500 + ffr_forecast + forecast_diff_int,
+				data = input_df
+				)
+
+			test_reg %>% summary(.)
 
 			test =
 				tdns$dns_coefs_forecast %>%
@@ -1274,18 +1281,26 @@ local({
 				slice_max(., vdate) %>%
 				mutate(., months_ahead_start = interval(floor_date(vdate, 'months'), date) %/% months(1)) %>%
 				mutate(., sp500 = tail(filter(sp500, vdate <= df$spf_vdate[[1]]), 1)$sp500) %>%
+				mutate(., vix = tail(filter(vix, vdate <= df$spf_vdate[[1]]), 1)$vix) %>%
 				left_join(
 					.,
 					ffr_forecasts %>% filter(., vdate <= df$spf_vdate[[1]]) %>% filter(., vdate == max(vdate)),
 					join_by(months_ahead_start == months_out, closest(vdate >= vdate))
 				) %>%
 				expand_grid(tdns$ttm_varname_map) %>%
+				# Rescale months_ahead_start to collapse TP forecasts >= 36 out
+				mutate(
+					.,
+					months_ahead_start_og = months_ahead_start,
+					months_ahead_start =
+						ifelse(months_ahead_start_og >= 36, (months_ahead_start_og - 36)/2 + 36, months_ahead_start_og)
+				) %>%
 				mutate(
 					.,
 					logttm = ttm ^ .0609 - 1,
-					logttm_int = months_ahead_start * logttm,
-					logttm_int_2 = months_ahead_start^.5 * logttm,
-					tdns1_int = tdns1 * months_ahead_start,
+					logttm_int = (months_ahead_start) * logttm,
+					logttm_int_2 = (months_ahead_start)^.5 * logttm,
+					tdns1_int = tdns1 * months_ahead_start^.5,
 					tdns1_int2 = tdns1 * logttm,
 					forecast_diff = ffr_forecast - tdns1,
 					forecast_diff_int = forecast_diff * months_ahead_start
@@ -1301,7 +1316,7 @@ local({
 			# 	.[, 1]
 
 			fitted = tibble(
-				months_ahead_start = test$months_ahead_start,
+				months_ahead_start = test$months_ahead_start_og,
 				varname = test$varname,
 				value = yhat,
 				type = 'predicted'
@@ -1312,7 +1327,7 @@ local({
 					varname,
 					spf_vdate = df$spf_vdate[[1]],
 					months_out = months_ahead_start,
-					date = floor_date(df$spf_vdate[[1]], 'months')  %m+% months(months_ahead_start),
+					date = floor_date(df$spf_vdate[[1]], 'months') %m+% months(months_ahead_start),
 					value,
 					type
 					)
@@ -1321,6 +1336,8 @@ local({
 				ggplot(fitted) +
 				geom_point(aes(x = months_out, y = value, color = type, group = type)) +
 				facet_wrap(vars(varname))
+
+			# print(plot)
 
 			list(
 				pred = fitted,
@@ -1342,6 +1359,7 @@ local({
 
 	print(model_coefs_plot)
 
+	# Check fits on the fitted TPs
 	models_tps_plot =
 		models_by_vdate %>%
 		map(., \(x) x$pred) %>%
@@ -1349,14 +1367,17 @@ local({
 		filter(., varname %in% c('t01m', 't03m', 't10y', 't30y')) %>%
 		mutate(., type_varname = paste0(varname, type)) %>%
 		mutate(., spf_year = year(spf_vdate)) %>%
-		slice_min(., order_by = spf_vdate, by = spf_year) %>%
+		slice_max(., order_by = spf_vdate, by = spf_year) %>% # Last SPF of each year
 		ggplot() +
 		geom_point(aes(x = months_out, y = value, color = varname, group = type_varname, size = type), shape = 18) +
 		facet_wrap(vars(spf_vdate), nrow = 2) +
 		scale_size_manual(values = c(actual = 2, predicted = .8)) +
 		ggthemes::theme_fivethirtyeight() +
-		labs(title = 'Fitted term premia estimates by t', x = 'Months forward', y = 'Term premia') +
-		theme(legend.position = 'none')
+		labs(
+			title = 'Fitted term premia estimates by t', x = 'Months forward', y = 'Term premia',
+			color = NULL, size = NULL
+			) +
+		theme(legend.position = 'bottom')
 
 	print(models_tps_plot)
 
@@ -1373,18 +1394,26 @@ local({
 			filter(., vdate == max(vdate)) %>%
 			mutate(., months_ahead_start = interval(floor_date(vdate, 'months'), date) %/% months(1)) %>%
 			mutate(., sp500 = tail(filter(sp500, vdate <= test_vdate), 1)$sp500) %>%
+			mutate(., vix = tail(filter(vix, vdate <= df$spf_vdate[[1]]), 1)$vix) %>%
 			left_join(
 				.,
 				ffr_forecasts %>% filter(., vdate <= test_vdate) %>% filter(., vdate == max(vdate)),
 				join_by(months_ahead_start == months_out, closest(vdate >= vdate))
 			) %>%
 			expand_grid(tdns$ttm_varname_map) %>%
+			# Rescale months_ahead_start to collapse TP forecasts >= 36 out
+			mutate(
+				.,
+				months_ahead_start_og = months_ahead_start,
+				months_ahead_start =
+					ifelse(months_ahead_start_og >= 36, (months_ahead_start_og - 36)/2 + 36, months_ahead_start_og)
+			) %>%
 			mutate(
 				.,
 				logttm = ttm ^ .0609 - 1,
-				logttm_int = months_ahead_start * logttm,
-				logttm_int_2 = months_ahead_start^.5 * logttm,
-				tdns1_int = tdns1 * months_ahead_start,
+				logttm_int = (months_ahead_start) * logttm,
+				logttm_int_2 = (months_ahead_start)^.5 * logttm,
+				tdns1_int = tdns1 * months_ahead_start^.5,
 				tdns1_int2 = tdns1 * logttm,
 				forecast_diff = ffr_forecast - tdns1,
 				forecast_diff_int = forecast_diff * months_ahead_start
@@ -1398,7 +1427,7 @@ local({
 		yhat = predict(model, x_new, type = 'response')[, 1]
 
 		fitted = tibble(
-			months_out = test$months_ahead_start,
+			months_out = test$months_ahead_start_og,
 			varname = test$varname,
 			value = ((1 + yhat/100)^12 - 1) * 100,
 			) %>%
@@ -1417,14 +1446,15 @@ local({
 
 	fixed_tp_plot =
 		tps %>%
-		filter(., date == floor_date(today('US/Eastern') %m-% months(3), 'month') & varname == 't10y') %>%
+		filter(., date == floor_date(today('US/Eastern') %m-% months(1), 'month') & varname == 't10y') %>%
 		ggplot() +
 		geom_line(aes(x = test_vdate, y = value, color = as.factor(model_vdate), group = model_vdate)) +
 		ggthemes::theme_igray() +
 		guides(color=guide_legend(ncol = 2)) +
-		labs(title = 'Forecasted term premiums for Dec-23 by forecast date', x = 't', y = 'term premium', color = 'model tau')
+		labs(title = 'Forecasted 10y TP for last month by forecast date', x = 't', y = 'term premium', color = 'model tau')
 
 	print(fixed_tp_plot)
+
 	# Reconstruct 10-year forward TP & annualize it!
 	tp_10y_plot =
 		tps %>%
@@ -1457,7 +1487,8 @@ local({
 		ggplot() +
 		geom_line(aes(x = ttm, y = value, color = as.factor(months_out), group = months_out)) +
 		geom_point(aes(x = ttm, y = value, color = as.factor(months_out), group = months_out)) +
-		facet_wrap(vars(test_vdate))
+		facet_wrap(vars(test_vdate)) +
+		labs(title = 'TP maturity curves, by forecast vdate', color = 'Months forward')
 
 	print(tp_curve_plot)
 
@@ -1657,20 +1688,22 @@ local({
 		transmute(., vdate, varname, freq = 'm', date, value = final_value)
 
 	forecasts_comparison = bind_rows(
-		tdns$expectations_forecasts %>% mutate(., value = value_norf, type = '1. EH'),
-		tdns$expectations_forecasts  %>% mutate(., type = '2. EH + RF'),
-		tdns$adj_forecasts %>% mutate(., type = '3. EH + TP'),
-		merged_forecasts %>% mutate(., type = '4. EH + TP + Hist (Final)'),
+		tdns$expectations_forecasts %>% mutate(., value = value_norf, type = '1. EH', is_final = F),
+		tdns$expectations_forecasts  %>% mutate(., type = '2. EH + RF', is_final = F),
+		tdns$adj_forecasts %>% mutate(., type = '3. EH + TP', is_final = F),
+		merged_forecasts %>% mutate(., type = '4. EH + TP + Hist (Final)', is_final = T)
 	)
 
 	subcomponent_plots =
 		forecasts_comparison %>%
 		filter(., vdate == max(vdate) - days(0)) %>%
 		ggplot(.) +
-		geom_line(aes(x = date, y = value, color = type), alpha = .5) +
+		geom_line(aes(x = date, y = value, color = type, linewidth = is_final), alpha = .4) +
 		facet_wrap(vars(varname)) +
+		scale_linewidth_manual(values = c(1, 2)) +
 		ggthemes::theme_igray() +
-		labs(title = 'Subcomponent forecasts at lastest vintage', color = 'Component')
+		labs(title = 'Subcomponent forecasts at latest vintage date', color = 'Component') +
+		guides(linewidth = 'none')
 
 	print(subcomponent_plots)
 

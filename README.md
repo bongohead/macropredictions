@@ -74,7 +74,7 @@ Server Structure:
 
 ## Changelog
 
-### v3.1.0 - 2024.06
+### v3.1.0 - 2024.10
 - Fixed broken external scrapers
 - **Inflation forecasts**
 	- Added ttm curve storage
@@ -84,6 +84,8 @@ Server Structure:
 	- Added 10-2 spreads
 	- Added vintage date consistency verification
 	- Added real Treasury yields
+	- Added term premia smoothing for 3y-5y forward forecasts
+	- Switched covariate for TPS model to months_ahead^.5 for greater stability
 - **R helpers**
 	- Cleaned up unit tests
 	- Fixed/deprecated broken scrapers
