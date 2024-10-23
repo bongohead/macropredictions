@@ -1394,7 +1394,7 @@ local({
 			filter(., vdate == max(vdate)) %>%
 			mutate(., months_ahead_start = interval(floor_date(vdate, 'months'), date) %/% months(1)) %>%
 			mutate(., sp500 = tail(filter(sp500, vdate <= test_vdate), 1)$sp500) %>%
-			mutate(., vix = tail(filter(vix, vdate <= df$spf_vdate[[1]]), 1)$vix) %>%
+			mutate(., vix = tail(filter(vix, vdate <= test_vdate), 1)$vix) %>%
 			left_join(
 				.,
 				ffr_forecasts %>% filter(., vdate <= test_vdate) %>% filter(., vdate == max(vdate)),
