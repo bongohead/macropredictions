@@ -180,6 +180,35 @@ local({
 })
 
 
+## Validation --------------------------------------------------------------
+local({
+	
+	# Check that there aren't multiple release dates in a single quarter - this can happen when the SPF revises their
+	# historical release calendar and happened on 1/15/25 with 2024Q3 being revised from 8/6 to 8/5
+	# https://www.philadelphiafed.org/-/media/frbp/assets/surveys-and-data/survey-of-professional-forecasters/spf-release-dates.txt
+
+	
+	unique_old_vdates = get_query(pg, "SELECT vdate FROM forecast_values_v2 WHERE forecast = 'spf' GROUP BY 1")
+	unique_new_vdates = raw_data %>% group_by(vdate) %>% summarize()
+	
+	counts_by_vdate_quarter =
+		tibble(vdate = unique(c(unique_old_vdates$vdate, unique_new_vdates$vdate))) %>%
+		mutate(., vdate_quarter = floor_date(vdate, 'quarter')) %>%
+		group_by(vdate_quarter) %>% 
+		summarize(., n = n())
+	
+	if (max(counts_by_vdate_quarter$n) > 1) {
+		stop(paste0(
+			'SPF release calendar issue - multiple vdates in quarters: ', 
+			paste0(filter(counts_by_vdate_quarter, n > 1)$vdate_quarter, collapse = ', ')
+		))
+	}
+	
+	
+})
+
+
+
 ## Export Forecasts ------------------------------------------------------------------
 local({
 
