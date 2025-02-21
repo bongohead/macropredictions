@@ -78,8 +78,8 @@ get_yahoo_data = function(tickers, .obs_start = '2000-01-01', .verbose = F) {
 
 		response_parsed =
 			request(url) %>%
-			req_perform() %>%
 			req_retry(max_tries = 5, backoff = \(resp) 20) %>%
+			req_perform() %>%
 			resp_body_json()
 
 		tibble(

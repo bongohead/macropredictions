@@ -94,9 +94,10 @@ local({
 		list_merge(., headers = list(
 			'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0'
 		)) %>%
+		req_error(is_error = \(resp) FALSE) %>%
 		req_perform()
 
-	if (str_detect(resp_body_string(r1), 'Are you a robot?')) {
+	if (r1$status_code == 403 || str_detect(resp_body_string(r1), 'Are you a robot?')) {
 		message(paste0('Bot detection - ', r1$url))
 		hist$bloom <<- tibble()
 		return()
