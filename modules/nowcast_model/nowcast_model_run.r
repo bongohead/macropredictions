@@ -143,31 +143,15 @@ local({
 	pull_data = keep(df_to_list(variable_params), \(x) x$hist_source == 'yahoo')
 
 	yahoo_data = list_rbind(map(pull_data, function(x) {
-		url =
-			paste0(
-				'https://query1.finance.yahoo.com/v7/finance/download/', x$hist_source_key,
-				'?period1=', as.numeric(as.POSIXct(as_date(IMPORT_DATE_START))),
-				'&period2=', as.numeric(as.POSIXct(Sys.Date() + days(1))),
-				'&interval=1d',
-				'&events=history&includeAdjustedClose=true'
-			)
-
-		data.table::fread(url, showProgress = FALSE) %>%
-			.[, c('Date', 'Adj Close')]	%>%
-			set_names(., c('date', 'value')) %>%
-			as_tibble(.) %>%
-			# Bug with yahoo finance returning null for date 7/22/21 as of 7/23
-			filter(., value != 'null') %>%
-			mutate(
+		get_yahoo_data(x$hist_source_key, .obs_start = IMPORT_DATE_START) %>%
+			transmute(
 				.,
 				varname = x$varname,
 				freq = x$hist_source_freq,
-				date = as_date(date),
+				date,
 				vdate = date,
-				value = as.numeric(value)
-				) %>%
-			return(.)
-
+				value
+			)
 		}))
 
 	hist$raw$yahoo <<- yahoo_data
@@ -260,7 +244,7 @@ local({
 		hist_agg_0 %>%
 		filter(., freq %in% c('d', 'w')) %>%
 		# Add in month of date
-		mutate(., this_month = lubridate::floor_date(date, 'month')) %>%
+		mutate(., this_month = floor_date(date, 'month')) %>%
 		as.data.table(.) %>%
 		# For each variable, for each month, create a dataframe of all month obs across all vintages
 		# Then for each vintage date, take the latest vintage date for every obs in the month and
@@ -271,7 +255,6 @@ local({
 				dcast(., vdate ~ date, value.var = 'value') %>%
 				.[order(vdate)] %>%
 				.[, colnames(.) := lapply(.SD, function(x) zoo::na.locf(x, na.rm = F)), .SDcols = colnames(.)] %>%
-				# {data.table(vdate = .$vdate, value = rowMeans(.[, -1], na.rm = T))} %>%
 				melt(., id.vars = 'vdate', value.name = 'value', variable.name = 'input_date', na.rm = T) %>%
 				.[, input_date := as_date(input_date)] %>%
 				.[, list(value = mean(value, na.rm = T), count = .N), by = 'vdate'] %>%
