@@ -233,10 +233,10 @@ local({
 		request('https://us-central1-ameribor.cloudfunctions.net/api/rates') %>%
 		req_perform %>%
 		resp_body_json %>%
-		keep(., \(x) all(c('date', 'ON', '1M', '3M', '6M', '1Y', '2Y') %in% names(x))) %>%
+		keep(., \(x) all(c('date', 'value', 'derivedThirty', 'derivedNinety') %in% names(x))) %>%
 		map(., function(x)
 			as_tibble(x) %>%
-				select(., all_of(c('date', 'ON', '1M', '3M', '6M', '1Y', '2Y'))) %>%
+				select(., all_of(c('date', 'value', 'derivedThirty', 'derivedNinety'))) %>%
 				mutate(., across(-date, function(x) as.numeric(x)))
 		) %>%
 		list_rbind %>%
