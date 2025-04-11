@@ -167,12 +167,12 @@ local({
 		req_retry(max_tries = 5) %>%
 		req_perform %>%
 		resp_body_json %>%
-		keep(., ~ all(c('date', 'ON', '1M', '3M', '6M', '1Y', '2Y') %in% names(.))) %>%
+		keep(., \(x) all(c('date', 'value', 'derivedThirty', 'derivedNinety') %in% names(x))) %>%
 		map(., function(x)
 			as_tibble(x) %>%
-				select(., all_of(c('date', 'ON', '1M', '3M', '6M', '1Y', '2Y'))) %>%
-				mutate(., across(-date, \(y) as.numeric(y)))
-			) %>%
+				select(., all_of(c('date', 'value', 'derivedThirty', 'derivedNinety'))) %>%
+				mutate(., across(-date, function(x) as.numeric(x)))
+		) %>%
 		list_rbind %>%
 		mutate(., date = ymd(date)) %>%
 		pivot_longer(., -date, names_to = 'varname_scrape', values_to = 'value') %>%
