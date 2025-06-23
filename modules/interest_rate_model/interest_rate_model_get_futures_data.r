@@ -47,10 +47,10 @@ local({
 			# 	max_months_out = c(5, 5, 5, 1, 1, 1, 1) * 12
 			# )
 			tibble(
-				varname = c('sofr', 'sofr', 'ffr', 'bsby', 'sonia', 'sonia', 'estr'),
-				ticker = c('SL', 'SQ', 'ZQ', 'BR', 'J8', 'JU', 'EB'),
-				max_months_out = c(5, 5, 5, 5, 6, 5, 6) * 12,
-				tenor = c('1m', '3m', '30d', '3m', '3m', '1m', '3m')
+				varname = c('sofr', 'sofr', 'ffr', 'sonia', 'sonia', 'estr'),
+				ticker = c('SL', 'SQ', 'ZQ', 'J8', 'JU', 'EB'),
+				max_months_out = c(5, 5, 5, 6, 5, 6) * 12,
+				tenor = c('1m', '3m', '30d', '3m', '1m', '3m')
 			)
 		) %>%
 		mutate(
@@ -243,48 +243,48 @@ local({
 
 ## CBOE --------------------------------------------------------------------
 #' AMERIBOR futures
-local({
-
-	scrape_dates = seq(
-		max(today('US/Eastern') %m-% months(BACKFILL_MONTHS), as_date('2019-08-16')), # Ameribor futures launch date
-		to = today('US/Eastern'),
-		by = '1 day'
-		)
-
-	scrape_reqs = map(scrape_dates, \(d)
-		request(str_glue('https://www.cboe.com/us/futures/market_statistics/settlement/csv?dt={d}'))
-		)
-
-	responses = macropredictions::send_async_requests(scrape_reqs, .chunk_size = 10, .max_retries = 5)
-
-	csv_data = list_rbind(compact(imap(responses, function(r, i) {
-		raw_str = resp_body_string(r)
-		if (str_length(raw_str) <= 50) return(NULL)
-		read_csv(raw_str, col_names = c('prod', 'sym', 'expdate', 'price'), col_types = 'ccDn', skip = 1) %>%
-			mutate(., tradedate = as_date(scrape_dates[[i]]))
-	})))
-
-	cboe_data =
-		csv_data %>%
-		filter(., prod %in% c('AMT1', 'AMB1', 'AMB3')) %>%
-		mutate(., tenor = case_when(
-			prod == 'AMB1' ~ '1m',
-			prod == 'AMB3' ~ '3m',
-			prod == 'AMT1' ~ '30d'
-		)) %>%
-		transmute(
-			.,
-			scrape_source = 'cboe',
-			varname = 'ameribor',
-			expdate = floor_date(expdate %m-% months(1), 'months'),
-			tenor,
-			tradedate,
-			is_final = ifelse(tradedate < today('US/Eastern'), T, F),
-			value = 100 - price/100
-		)
-
-	scraped_data$cboe <<- cboe_data
-})
+# local({
+#
+# 	scrape_dates = seq(
+# 		max(today('US/Eastern') %m-% months(BACKFILL_MONTHS), as_date('2019-08-16')), # Ameribor futures launch date
+# 		to = today('US/Eastern'),
+# 		by = '1 day'
+# 		)
+#
+# 	scrape_reqs = map(scrape_dates, \(d)
+# 		request(str_glue('https://www.cboe.com/us/futures/market_statistics/settlement/csv?dt={d}'))
+# 		)
+#
+# 	responses = macropredictions::send_async_requests(scrape_reqs, .chunk_size = 10, .max_retries = 5)
+#
+# 	csv_data = list_rbind(compact(imap(responses, function(r, i) {
+# 		raw_str = resp_body_string(r)
+# 		if (str_length(raw_str) <= 50) return(NULL)
+# 		read_csv(raw_str, col_names = c('prod', 'sym', 'expdate', 'price'), col_types = 'ccDn', skip = 1) %>%
+# 			mutate(., tradedate = as_date(scrape_dates[[i]]))
+# 	})))
+#
+# 	cboe_data =
+# 		csv_data %>%
+# 		filter(., prod %in% c('AMT1', 'AMB1', 'AMB3')) %>%
+# 		mutate(., tenor = case_when(
+# 			prod == 'AMB1' ~ '1m',
+# 			prod == 'AMB3' ~ '3m',
+# 			prod == 'AMT1' ~ '30d'
+# 		)) %>%
+# 		transmute(
+# 			.,
+# 			scrape_source = 'cboe',
+# 			varname = 'ameribor',
+# 			expdate = floor_date(expdate %m-% months(1), 'months'),
+# 			tenor,
+# 			tradedate,
+# 			is_final = ifelse(tradedate < today('US/Eastern'), T, F),
+# 			value = 100 - price/100
+# 		)
+#
+# 	scraped_data$cboe <<- cboe_data
+# })
 
 # Finalize ----------------------------------------------------------
 ## Store in SQL ----------------------------------------------------------

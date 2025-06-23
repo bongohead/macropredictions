@@ -1530,13 +1530,13 @@ local({
 			last_hist_diff = ifelse(is.na(last_hist), NA, last_hist - value)
 		) %>%
 		ungroup(.) %>%
-		# Map weights with sigmoid function and fill down forecast month 0 histoical value for full vdate x varname
+		# Map weights with sigmoid function and fill down forecast month 0 historical value for full vdate x varname
 		mutate(
 			.,
 			# Scale multiplier for origin month (.5 to 1).
 			# In the next step, this is the sigmoid curve's y-axis crossing point.
 			# Swap to k = 1 in both logistic functions to force smoothness (original 4, .5)
-			forecast_origin_y = logistic((1 - day(vdate)/days_in_month(vdate)), get_logistic_x0(1/4, k = 2), k = 2),
+			forecast_origin_y = logistic((1 - day(vdate)/days_in_month(vdate)), get_logistic_x0(0.2, k = 2), k = 2),
 			# Goal: for f(x; x0) = 1/(1 + e^-k(x  - x0)) i.e. the logistic function,
 			# find x0 s.t. f(0; x0) = forecast_origin_y => x0 = log(1/.75 - 1)/k
 			forecast_weight =
@@ -1558,8 +1558,8 @@ local({
 		filter(., vdate >= today('US/Eastern') - days(90)) %>%
 		filter(., date == floor_date(today('US/Eastern'), 'month'), varname == 't10y') %>%
 		ggplot(.) +
-		geom_line(aes(x = vdate, y = forecast_weight, color = format(vdate, '%Y%m'))) +
-		labs(title = 'Forecast weights for this months forecast over time')
+		geom_line(aes(x = vdate, y = forecast_weight, color = as.factor(floor_date(vdate, 'month')))) +
+		labs(title = 'Forecast weights for this months forecast over time', color = 'Month')
 
 	print(fw_over_time_plot)
 
@@ -2135,12 +2135,137 @@ local({
 	submodels$real <<- real_final
 })
 
+## AMB (Old) ---------------------------------------------------------------------
+# local({
+#
+# 	# AMB1
+# 	# AMT1 <->
+# 	# Get FFR spread <-> compare historical change from AMERIBOR
+# 	backtest_vdates = seq(
+# 		from = max(today('US/Eastern') %m-% months(BACKTEST_MONTHS), as_date('2023-07-01')),
+# 		# Ameribor missing close-dates before that
+# 		to = today('US/Eastern'),
+# 		by = '1 day'
+# 	)
+#
+# 	# vdate in futures table represents trade dates, not pull dates!
+# 	futures_df = get_query(pg, str_glue(
+# 		"SELECT varname, tradedate, expdate AS date, tenor, value
+# 		FROM interest_rate_model_futures_values
+# 		WHERE
+# 			scrape_source = 'cboe'
+# 			AND varname IN ('ameribor')
+# 			AND is_final IS TRUE
+# 			AND tenor = '30d'
+# 			AND tradedate >= '{min_tradedate}'",
+# 		min_tradedate = backtest_vdates[1] - days(7)
+# 	))
+#
+# 	raw_data =
+# 		expand_grid(vdate = backtest_vdates, varname = c('ameribor'), months_out = 0:60) %>%
+# 		mutate(., date = floor_date(vdate, 'month') %m+% months(months_out), min_tradedate = vdate - days(7)) %>%
+# 		left_join(futures_df, join_by(varname, date, closest(vdate >= tradedate), min_tradedate <= tradedate)) %>%
+# 		mutate(., max_months_out = max(ifelse(is.na(value), 0, months_out)), .by = c(vdate, varname)) %>%
+# 		filter(., max_months_out != 0) # Keep vdate x varnames with at least some non-NA values
+#
+# 	# Backfill start-0 values with historical data if there's no forecast
+# 	hist_daily = filter(bind_rows(hist), freq == 'd' & varname %in% c('ameribor'))
+#
+# 	# Get existing same-month mean values for each vdates
+# 	hist_by_vdate =
+# 		distinct(hist_daily, varname, vdate) %>%
+# 		mutate(., date = floor_date(vdate, 'month')) %>%
+# 		inner_join(
+# 			.,
+# 			transmute(hist_daily, varname, trailing_vdate = vdate, value, date = floor_date(date, 'month')),
+# 			join_by(date, varname, vdate >= trailing_vdate)
+# 		) %>%
+# 		group_by(., varname, vdate, date) %>%
+# 		summarize(., month_avg = mean(value), .groups = 'drop')
+#
+# 	filled_data =
+# 		raw_data %>%
+# 		left_join(
+# 			.,
+# 			transmute(hist_by_vdate, varname, hist_vdate = vdate, date, months_out = 0, month_avg),
+# 			join_by(varname, months_out, date, closest(vdate >= hist_vdate))
+# 		) %>%
+# 		mutate(., value = ifelse(is.na(value), month_avg, value)) %>%
+# 		# Some are still empty, so join in last available data as well even if not in the same month
+# 		left_join(
+# 			.,
+# 			transmute(
+# 				hist_daily, varname, months_out = 0,
+# 				hist_d_date = date, hist_d_vdate = vdate, hist_d_value = value
+# 			),
+# 			join_by(varname, months_out, date >= hist_d_date, closest(vdate >= hist_d_vdate))
+# 		) %>%
+# 		# Needed in case there are different hist_d_dates with same hist_d_vdate
+# 		slice_max(., hist_d_date, by = c(vdate, varname, date)) %>%
+# 		mutate(., value = ifelse(is.na(value), hist_d_value, value)) %>%
+# 		select(., vdate, varname, months_out, date, value, max_months_out)
+#
+# 	# Check if any vdate is missing data
+# 	filled_data %>%
+# 		filter(., months_out == 0 & is.na(value)) %>%
+# 		summarize(., missing = sum(is.na(value)), .by = 'varname')
+#
+# 	cboe_data =
+# 		filled_data %>%
+# 		left_join(
+# 			.,
+# 			hist$afx %>%
+# 				filter(., varname == 'ameribor') %>%
+# 				slice_max(., date, with_ties = F, by = vdate) %>%
+# 				transmute(., afx_vdate = vdate, ameribor_hist = value),
+# 			join_by(closest(vdate >= afx_vdate))
+# 		) %>%
+# 		left_join(
+# 			.,
+# 			hist$fred %>%
+# 				filter(., varname == 'sofr') %>%
+# 				slice_max(., date, with_ties = F, by = vdate) %>%
+# 				transmute(., ffr_vdate = vdate, ffr_hist = value),
+# 			join_by(closest(vdate >= ffr_vdate))
+# 		) %>%
+# 		inner_join(
+# 			.,
+# 			submodels$cme %>% filter(., varname == 'sofr') %>% transmute(vdate, date, ffr_pred = value),
+# 			join_by(date, vdate)
+# 		) %>%
+# 		group_split(., vdate) %>%
+# 		map(., function(df) {
+# 			# 50% FFR + Ameribor constant spread, 50% Ameribor futures
+# 			df %>%
+# 				mutate(., value = zoo::na.locf(value)) %>%
+# 				mutate(., ffr_based_forecast = ameribor_hist - ffr_hist + ffr_pred) %>%
+# 				mutate(., value = .15 * value + .85 * ffr_based_forecast)
+# 		}) %>%
+# 		list_rbind() %>%
+# 		transmute(., vdate, date, freq = 'm', value, varname = 'ameribor')
+#
+# 	# Plot comparison against TDNS
+# 	cboe_plot =
+# 		cboe_data %>%
+# 		filter(., vdate == max(vdate)) %>%
+# 		bind_rows(
+# 			.,
+# 			filter(submodels$cme, varname == 'ffr' & vdate == max(vdate)),
+# 			filter(submodels$cme, varname == 'sofr' & vdate == max(vdate))
+# 			) %>%
+# 		ggplot(.) +
+# 		geom_line(aes(x = date, y = value, color = varname, group = varname))
+#
+# 	print(cboe_plot)
+#
+# 	submodels$cboe <<- cboe_data
+# })
+
+
 ## AMB ---------------------------------------------------------------------
 local({
 
-	# AMB1
-	# AMT1 <->
-	# Get FFR spread <-> compare historical change from AMERIBOR
+	# Get SOFR spread <-> compare historical change from AMERIBOR
 	backtest_vdates = seq(
 		from = max(today('US/Eastern') %m-% months(BACKTEST_MONTHS), as_date('2023-07-01')),
 		# Ameribor missing close-dates before that
@@ -2148,105 +2273,81 @@ local({
 		by = '1 day'
 	)
 
-	# vdate in futures table represents trade dates, not pull dates!
-	futures_df = get_query(pg, str_glue(
-		"SELECT varname, tradedate, expdate AS date, tenor, value
-		FROM interest_rate_model_futures_values
-		WHERE
-			scrape_source = 'cboe'
-			AND varname IN ('ameribor')
-			AND is_final IS TRUE
-			AND tenor = '30d'
-			AND tradedate >= '{min_tradedate}'",
-		min_tradedate = backtest_vdates[1] - days(7)
-	))
+	desired_hists = expand_grid(
+		vdate = backtest_vdates,
+		months_back = -24:0,
+		varname = c('ameribor', 'sofr')
+		) %>%
+		mutate(., date = add_with_rollback(floor_date(vdate, 'month'), months(months_back)))
 
-	raw_data =
-		expand_grid(vdate = backtest_vdates, varname = c('ameribor'), months_out = 0:60) %>%
-		mutate(., date = floor_date(vdate, 'month') %m+% months(months_out), min_tradedate = vdate - days(7)) %>%
-		left_join(futures_df, join_by(varname, date, closest(vdate >= tradedate), min_tradedate <= tradedate)) %>%
-		mutate(., max_months_out = max(ifelse(is.na(value), 0, months_out)), .by = c(vdate, varname)) %>%
-		filter(., max_months_out != 0) # Keep vdate x varnames with at least some non-NA values
+	hist_daily = filter(bind_rows(hist), freq == 'd' & varname %in% c('ameribor', 'sofr'))
 
-	# Backfill start-0 values with historical data if there's no forecast
-	hist_daily = filter(bind_rows(hist), freq == 'd' & varname %in% c('ameribor'))
-
-	# Get existing same-month mean values for each vdates
-	hist_by_vdate =
-		distinct(hist_daily, varname, vdate) %>%
-		mutate(., date = floor_date(vdate, 'month')) %>%
+	# Month-avgs
+	month_avgs =
+		desired_hists %>%
 		inner_join(
 			.,
 			transmute(hist_daily, varname, trailing_vdate = vdate, value, date = floor_date(date, 'month')),
 			join_by(date, varname, vdate >= trailing_vdate)
 		) %>%
 		group_by(., varname, vdate, date) %>%
-		summarize(., month_avg = mean(value), .groups = 'drop')
+		summarize(., value = mean(value), .groups = 'drop')
 
-	filled_data =
-		raw_data %>%
-		left_join(
-			.,
-			transmute(hist_by_vdate, varname, hist_vdate = vdate, date, months_out = 0, month_avg),
-			join_by(varname, months_out, date, closest(vdate >= hist_vdate))
-		) %>%
-		mutate(., value = ifelse(is.na(value), month_avg, value)) %>%
-		# Some are still empty, so join in last available data as well even if not in the same month
-		left_join(
-			.,
-			transmute(
-				hist_daily, varname, months_out = 0,
-				hist_d_date = date, hist_d_vdate = vdate, hist_d_value = value
-			),
-			join_by(varname, months_out, date >= hist_d_date, closest(vdate >= hist_d_vdate))
-		) %>%
-		# Needed in case there are different hist_d_dates with same hist_d_vdate
-		slice_max(., hist_d_date, by = c(vdate, varname, date)) %>%
-		mutate(., value = ifelse(is.na(value), hist_d_value, value)) %>%
-		select(., vdate, varname, months_out, date, value, max_months_out)
+	filled_data = left_join(desired_hists, month_avgs, join_by(varname, date, vdate))
 
-	# Check if any vdate is missing data
-	filled_data %>%
-		filter(., months_out == 0 & is.na(value)) %>%
-		summarize(., missing = sum(is.na(value)), .by = 'varname')
-
-	cboe_data =
+	reg_data =
 		filled_data %>%
-		left_join(
+		# pivot to vdate x date level
+		pivot_wider(., id_cols = c(vdate, date), names_from = 'varname', values_from = 'value') %>%
+		mutate(
 			.,
-			hist$afx %>%
-				filter(., varname == 'ameribor') %>%
-				slice_max(., date, with_ties = F, by = vdate) %>%
-				transmute(., afx_vdate = vdate, ameribor_hist = value),
-			join_by(closest(vdate >= afx_vdate))
+			spreadamb = ameribor - sofr
 		) %>%
-		left_join(
-			.,
-			hist$fred %>%
-				filter(., varname == 'sofr') %>%
-				slice_max(., date, with_ties = F, by = vdate) %>%
-				transmute(., ffr_vdate = vdate, ffr_hist = value),
-			join_by(closest(vdate >= ffr_vdate))
-		) %>%
+		arrange(., vdate, date) %>%
+		mutate(., spreadamb.l1 = lag(spreadamb, 1))
+
+	spread_forecast = list_rbind(map(group_split(reg_data, vdate), function(df) {
+
+		spreadamb_lt = mean(df$spreadamb, na.rm = T)
+		spreadamb_l1 = tail(na.omit(df$spreadamb), 1)
+
+		# Mean-reverting AR(1), mean reversion speed changes - estimate w/intercept, ignore later
+		phi = coef(lm(tail(spreadamb, -1) ~ head(spreadamb, -1), data = df))[2]
+		# <1 phi --> eventually mean reverts
+		phi = max(min(phi, 0.99), 0.50) # Phi = 1 == random walk, phi == 0 : full mean-reversion in one step
+
+		# forecast = lt_mean + decay_rate x previous_deviation
+		tibble(vdate = df$vdate[[1]], months_out = 0:60) %>%
+			mutate(
+				.,
+				spreadamb = spreadamb_lt + (phi ^ months_out) * (spreadamb_l1 - spreadamb_lt)
+			)
+	}))
+
+	afx_data =
+		spread_forecast %>%
+		mutate(., date = floor_date(vdate, 'month') %m+% months(months_out)) %>%
 		inner_join(
 			.,
-			submodels$cme %>% filter(., varname == 'sofr') %>% transmute(vdate, date, ffr_pred = value),
-			join_by(date, vdate)
+			submodels$cme %>%
+				filter(., varname %in% c('sofr')) %>%
+				pivot_wider(., id_cols = c(date, vdate), names_from = varname, values_from = value),
+			join_by(vdate, date)
 		) %>%
-		group_split(., vdate) %>%
-		map(., function(df) {
-			# 50% FFR + Ameribor constant spread, 50% Ameribor futures
-			df %>%
-				mutate(., value = zoo::na.locf(value)) %>%
-				mutate(., ffr_based_forecast = ameribor_hist - ffr_hist + ffr_pred) %>%
-				mutate(., value = .15 * value + .85 * ffr_based_forecast)
-		}) %>%
-		list_rbind() %>%
-		transmute(., vdate, date, freq = 'm', value, varname = 'ameribor')
+		mutate(., ameribor = sofr + spreadamb) %>%
+		select(., vdate, date, ameribor) %>%
+		pivot_longer(., -c(vdate, date), names_to = 'varname', values_to = 'value') %>%
+		transmute(
+			.,
+			varname,
+			freq = 'm',
+			vdate,
+			date,
+			value
+		)
 
-	# Plot comparison against TDNS
-	cboe_plot =
-		cboe_data %>%
+	afx_plot =
+		afx_data %>%
 		filter(., vdate == max(vdate)) %>%
 		bind_rows(
 			.,
@@ -2256,9 +2357,31 @@ local({
 		ggplot(.) +
 		geom_line(aes(x = date, y = value, color = varname, group = varname))
 
-	print(cboe_plot)
+	print(afx_plot)
 
-	submodels$cboe <<- cboe_data
+	afx_plot_by_vdate =
+		afx_data %>%
+		bind_rows(
+			.,
+			filter(submodels$cme, varname == 'ffr'),
+			filter(submodels$cme, varname == 'sofr')
+		) %>%
+		inner_join(
+			.,
+			afx_data %>%
+				group_by(start_of_month_vdate = floor_date(vdate, 'month')) %>%
+				summarize(start_of_month_vdate = min(vdate), .groups = 'drop') %>%
+				tail(., 4) %>%
+				rename(vdate = 1),
+			by = 'vdate'
+			) %>%
+		ggplot(.) +
+		geom_line(aes(x = date, y = value, color = varname, group = varname)) +
+		facet_wrap(vars(vdate))
+
+	print(afx_plot_by_vdate)
+
+	submodels$afx <<- afx_data
 })
 
 
@@ -2460,7 +2583,7 @@ local({
 			submodels$cme,
 			submodels$tdns,
 			submodels$real,
-			submodels$cboe,
+			submodels$afx,
 			submodels$mort,
 			submodels$spreads
 		) %>%
