@@ -151,82 +151,7 @@ local({
 	hist$raw$yahoo <<- yahoo_data
 })
 
-## 4. BLOOM  ----------------------------------------------------------
-local({
-
-	message(str_glue('*** Importing Bloom Data | {format(now(), "%H:%M")}'))
-
-	# Note: fingerprinting is heavily UA based3
-	r1 =
-		request('https://www.bloomberg.com') %>%
-		add_standard_headers() %>%
-		list_merge(., headers = list(
-			'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0'
-		)) %>%
-		req_error(is_error = \(resp) FALSE) %>%
-		req_perform()
-
-	if (r1$status_code == 403 || str_detect(resp_body_string(r1), 'Are you a robot?')) {
-		message(paste0('Bot detection - ', r1$url))
-		hist$raw$bloom <<- tibble()
-		return()
-	}
-
-	r1_cookies =
-		r1 %>%
-		resp_headers() %>%
-		imap(., \(x, i) if (i == 'set-cookie') str_extract(x, '^[^;]*;') else NULL) %>%
-		compact %>%
-		unlist() %>%
-		paste0(., collapse = ' ')
-
-	bloom_data = list_rbind(map(df_to_list(filter(variable_params, hist_source == 'bloom')), function(x) {
-
-		url = paste0(
-			'https://www.bloomberg.com/markets2/api/history/', x$hist_source_key, '%3AIND/PX_LAST?',
-			'timeframe=5_YEAR&period=daily&volumePeriod=daily'
-		)
-
-		res =
-			request(url) %>%
-			list_merge(., headers = list(
-				'Host' = 'www.bloomberg.com',
-				'Sec-Ch-Ua-Platform' = 'Windows',
-				'Accept' = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-				'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0',
-				'Cookie' = r1_cookies
-				)) %>%
-			req_perform
-
-		if (str_detect(resp_body_string(res), 'Are you a robot?')) stop(paste0('Bot detection - ', res$url))
-
-		clean =
-			res %>%
-			resp_body_json %>%
-			.[[1]] %>%
-			.$price %>%
-			map(., \(x) as_tibble(x)) %>%
-			list_rbind %>%
-			transmute(
-				.,
-				varname = x$varname,
-				freq = 'd',
-				date = as_date(dateTime),
-				vdate = date,
-				value
-			) %>%
-			na.omit
-
-		# Add sleep due to bot detection
-		Sys.sleep(max(10, rnorm(1, 30, 10)))
-
-		return(clean)
-	}))
-
-	hist$raw$bloom <<- bloom_data
-})
-
-## 5. AFX  ----------------------------------------------------------
+## 4. AFX  ----------------------------------------------------------
 local({
 
 	afx_data =
@@ -253,7 +178,7 @@ local({
 	hist$raw$afx <<- afx_data
 })
 
-## 6. ECB ---------------------------------------------------------------------
+## 5. ECB ---------------------------------------------------------------------
 local({
 
 	estr_data =
@@ -270,7 +195,7 @@ local({
 
 
 
-## 7. BOE ---------------------------------------------------------------------
+## 6. BOE ---------------------------------------------------------------------
 local({
 
 	# Bank rate
@@ -307,7 +232,7 @@ local({
 	hist$raw$boe <<- boe_data
 })
 
-## 8. Calculated Variables ----------------------------------------------------------
+## 7. Calculated Variables ----------------------------------------------------------
 local({
 
 	message('*** Adding Calculated Variables')
@@ -463,7 +388,7 @@ local({
 	hist$raw$calc <<- hist_calc
 })
 
-## 9. Verify ----------------------------------------------------------
+## 8. Verify ----------------------------------------------------------
 local({
 
 	missing_varnames = variable_params$varname[!variable_params$varname %in% unique(bind_rows(hist$raw)$varname)]
@@ -473,7 +398,7 @@ local({
 })
 
 
-## 10. Aggregate Frequencies ----------------------------------------------------------
+## 9. Aggregate Frequencies ----------------------------------------------------------
 local({
 
 	message(str_glue('*** Aggregating Monthly & Quarterly Data | {format(now(), "%H:%M")}'))
