@@ -1,102 +1,160 @@
-import os
 import asyncio
+from collections.abc import Callable
 import aiohttp
-from dotenv import load_dotenv
 from tqdm import tqdm
+import os
 
-load_dotenv()
-
-async def _send_async_batch_llm_requests(prompts: list[list], url: str, headers: dict, params: dict, batch_size: int, max_retries: int, verbose: bool | None = None):
+async def send_async_requests(inputs: list[dict], request_generator: Callable, batch_size: int = 10, max_retries: int = 3, verbose: bool | None = None) -> list[object]:
     """
-    Core internal function to handle batching, retries, and making requests. Don't call this function directly, use the functions below instead.
+    Send many HTTP requests concurrently, with batching, exponential back-off
+    and automatic retry.
 
-    Params:
-        @prompts: A lists of prompts, where each prompt is a list of messages to send in the request.
-        @url: The endpoint.
-        @headers: Any headers to send to the endpoint.
-        @params: Any other POST parameters to send to the endpoint.
+    Params
+        @inputs: A list of dicts, where each element corresponds to a single request.
+        @request_generator: A function with two arguments (session, input), which takes a single input dictionary and returns a parsed 
+         asyncio session response or raises.
         @batch_size: Max number of prompts to group in a single batch. Prompts in a batch are sent concurrently.
-        @max_retries: Max number of retries on failed prompt calls.
-        @verbose: Whether to print the progress.
-        
-    Example:
-        prompts_list = [
-            [{'role': 'system', 'content': 'You are a math assistant. Answer all questions with a thorough explanation.'}, {'role': 'user', 'content': 'What is 1+1?'}],
-            [{'role': 'system', 'content': 'You are a math assistant. Answer all questions with a thorough explanation.'}, {'role': 'user', 'content': 'What is 1+2?'}]
-        ]
-        await send_batch_llm_requests(
-            prompts_list,
+        @max_retries: Max number of retries on failed prompt calls (so total attempts <= max_retries + 1).
+        @verbose: If True, prints progress. If None, defaults to True if multiple batches are used.
+
+    Returns:
+        A list in exactly the same order as inputs.
+
+    Raises
+        RuntimeError if any request is still failing after the allowed retries.
+
+    Example
+        # Example 1: GET request returning JSON
+        async def req_gen(session, input):
+            url = 'https://en.wikipedia.org/wiki/' + input['q'] + '/'
+            headers = {'Content-Type': 'text/html'}
+            async with session.get(url, headers = headers) as response:
+                return await response.text()
+                
+        res = await send_async_requests(inputs = [{"q": "test"}, {"q": "dog"}], request_generator = req_gen)
+
+        # Example 2: POST request returning JSON
+        async def req_gen(session, input):
             url = 'https://api.openai.com/v1/chat/completions'
-            headers = {"Authorization": f"Bearer {api_key or os.environ.get('OPENAI_API_KEY')}",},
-            batch_size = 2,
-            max_retries = 1,
-            verbose = True
+            headers = {'Authorization': 'Bearer ' + os.getenv('OPENAI_API_KEY')}
+            payload = {'model': 'gpt-4.1', 'messages': input['p']}
+            async with session.post(url, headers = headers, json = payload) as response:
+                return await response.json()
+                
+        res = await send_async_requests(
+            inputs = [{"p": [{'role': 'user', 'content': 'hello!'}]}, {"p": [{'role': 'user', 'content': 'bye!'}]}], 
+            request_generator = req_gen
         )
     """
-    async def make_request(session, prompt):
-        async with session.post(url, headers=headers, json={**{'messages': prompt}, **params}) as response:
-            return await response.json()
 
-    async def retry_requests(req_prompts, total_retries=0):
-        if total_retries > max_retries:
-            raise Exception('Requests failed')
+    # Retry helpers
+    async def retry_requests(session, tasks, attempt: int = 0):
+        """
+        Recursive function to retry until they all exceed or we exceed max_retries.
 
-        if total_retries > 0:
-            print(f'Retry {total_retries} for {len(req_prompts)} failed requests!')
-            await asyncio.sleep(2 * 2 ** total_retries)  # Backoff rate
+        Params:
+            @session: Open aiohttp session shared by the caller
+            @tasks: List of (idx, payload) pairs on first call; the payload is the original element from `inputs`.
+             On retries we keep a triple (idx, payload, exc) to surface the last err message if give up.
+            @attempt: Current retry depth.
 
-        async with aiohttp.ClientSession() as session:
-            results = await asyncio.gather(
-                *(make_request(session, prompt) for prompt in req_prompts),
-                return_exceptions=True
+        Returns:
+            List of (idx, result) pairs that succeeded (order *not* guaranteed)
+        """
+        # Stop condition
+        if attempt > max_retries:
+            summary = "\n".join(f"idx {idx}: {exc!r}" for idx, _payload, exc in tasks)
+            raise RuntimeError(f"Maximum retries exceeded. Still failing:\n{summary}")
+        
+        # Exponential backoff before this retry round
+        if attempt:
+            backoff = 2 ** attempt
+            print(f"Retry {attempt} - sleeping {backoff}s for {len(tasks)} requests")
+            await asyncio.sleep(backoff)
+
+        # Fire all pending requests concurrently.
+        coroutines = (
+            request_generator(session, payload) # Build the HTTP call
+            for _idx, payload, *_ in tasks # Works for 2- or 3-tuples
+        )
+        results = await asyncio.gather(*coroutines, return_exceptions = True)
+
+        # Partition results into `completed` and `pending` for the next try. #
+        completed = [] # List of 2-tuples containing (index, return obj)
+        pending = [] # List of 3-tuples containing (index, input dict, exception)
+
+        for (idx, payload, *_), result in zip(tasks, results):
+            if isinstance(result, Exception):
+                if attempt == 0:                       # first failure → log once
+                    print(f"[idx {idx}] first failure: {result!r}")
+                pending.append((idx, payload, result)) # keep the exception!
+            else:
+                completed.append((idx, result))
+
+        # If anything failed, retry just those; otherwise bubble success to the caller
+        if pending:
+            completed.extend(
+                await retry_requests(session, pending, attempt + 1)
             )
+            
+        return completed
+    
+    # Batching
+    indexed = list(enumerate(inputs))
+    chunks = [indexed[i:i + batch_size] for i in range(0, len(indexed), batch_size)]
+    show_bar = verbose is True or (verbose is None and len(chunks) > 1)
 
-        successful_responses = [result for result in results if not isinstance(result, Exception)]
-        failed_requests = [request for request, result in zip(req_prompts, results) if isinstance(result, Exception)]
+    all_pairs: list[tuple[int, object]] = []
 
-        if failed_requests:
-            print([result for result in results if isinstance(result, Exception)])
-            retry_responses = await retry_requests(failed_requests, total_retries + 1)
-            successful_responses.extend(retry_responses)
+    # Sequential loop
+    for chunk in tqdm(chunks, total = len(chunks), disable = not show_bar, leave = True):
+        async with aiohttp.ClientSession() as session:   # new session each batch
+            pairs = await retry_requests(session, chunk)
+        all_pairs.extend(pairs)
 
-        return successful_responses
+    # Re-ordering
+    flat = {idx: resp for idx, resp in all_pairs}
+    if len(flat) != len(inputs):
+        raise RuntimeError('Output length mismatch; some requests never succeeded')
 
-    chunks = [prompts[i:i + batch_size] for i in range(0, len(prompts), batch_size)]
-    verbose = True if verbose is True or (verbose is None and len(chunks) > 1) else False
-
-    responses = [await retry_requests(chunk) for chunk in tqdm(chunks, disable=not verbose)]
-    parsed_responses = [item for sublist in responses for item in sublist]  # Flatten the list
-
-    if len(parsed_responses) != len(prompts):
-        raise Exception('Error: length of output not the same as input!')
-
-    return parsed_responses
+    return [flat[i] for i in range(len(inputs))]
 
 
-
-async def get_llm_responses_openai(prompts: list[list], params: dict = {'model': 'gpt-4o-mini'}, batch_size: int = 3, max_retries: int = 3, api_key: str = os.environ.get('OPENAI_API_KEY'), verbose: bool | None = None):
+async def get_llm_responses_openai(prompts: list[list], params: dict = {'model': 'gpt-4o-mini'}, batch_size: int = 3, max_retries: int = 3, api_key: str = os.getenv('OPENAI_API_KEY'), verbose = None):   
     """
     Asynchronously send a list of LLM prompts to the OpenAI API endpoint directly
 
     Params:
         @prompts: A lists of prompts, where each prompt is a list of messages to send in the request.
-        @params: Anything other than the messages to pass into the request body, such as model or temperature. See https://platform.openai.com/docs/api-reference/chat/create.
+        @params: Anything other than the messages to pass into the request body, such as model or temperature.
         @batch_size: Max number of prompts to group in a single batch. Prompts in a batch are sent concurrently.
         @max_retries: Max number of retries on failed prompt calls.
         @api_key: The OpenAI API key.
         
     Example:
         prompts_list = [
-            [{'role': 'system', 'content': 'You are a math assistant. Answer all questions with a thorough explanation.'}, {'role': 'user', 'content': 'What is 1+1?'}],
-            [{'role': 'system', 'content': 'You are a math assistant. Answer all questions with a thorough explanation.'}, {'role': 'user', 'content': 'What is 1+2?'}]
+            [{'role': 'system', 'content': 'You are a math teacher.'}, {'role': 'user', 'content': 'What is 1+1?'}],
+            [{'role': 'system', 'content': 'You are a math teacher.'}, {'role': 'user', 'content': 'What is 1+2?'}],
+            [{'role': 'system', 'content': 'You are a math teacher.'}, {'role': 'user', 'content': 'What is 1+3?'}],
+            [{'role': 'system', 'content': 'You are a math teacher.'}, {'role': 'user', 'content': 'What is 1+4?'}]
         ]
         
-        await get_llm_responses_openai(prompts_list, {'model': 'gpt-4o-mini', 'temperature': 0.5})
+        await get_llm_responses_openai(prompts_list, {'model': 'o4-mini'})
     """
 
     url = 'https://api.openai.com/v1/chat/completions'
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-    }
+    headers = {'Authorization': 'Bearer ' + api_key}
+    params = params or {}
 
-    return await _send_async_batch_llm_requests(prompts, url, headers, params, batch_size, max_retries, verbose)
+    async def _request(session, prompt: list[dict]) -> object:
+        payload = {'messages': prompt, **params}
+        async with session.post(url, headers = headers, json = payload) as resp:
+            return await resp.json()
+
+    return await send_async_requests(
+        inputs = prompts,
+        request_generator = _request,
+        batch_size = batch_size,
+        max_retries = max_retries,
+        verbose = verbose,
+    )
