@@ -43,7 +43,8 @@ local({
 		'2024-04-14', 'https://s.wsj.net/public/resources/documents/wsjecon0424.xlsx',
 		'2024-07-11', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0724.xlsx',
 		'2024-10-14', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon1024.xlsx',
-		'2025-01-19', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0125.xlsx'
+		'2025-01-19', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0125.xlsx',
+		'2025-04-12', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0425.xlsx'
 	)
 
 	orgs_to_retain <<- orgs_to_retain
