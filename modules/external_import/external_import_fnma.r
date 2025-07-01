@@ -61,7 +61,7 @@ local({
 				request(paste0('https://www.fanniemae.com', x$article)) %>%
 				req_perform %>%
 				resp_body_html %>%
-				html_node(., "div[data-block-plugin-id='field_block:node:news:field_date'] > div") %>%
+				html_node(., '.field-space-sm.font-weight-light') %>%
 				html_text %>%
 				mdy
 

@@ -8,10 +8,9 @@ import os
 import re
 import pandas as pd
 import numpy as np
-from tqdm import tqdm
 from datetime import datetime
+from zoneinfo import ZoneInfo   
 import tempfile
-import pytz
 
 from cairosvg import svg2png
 from easyocr import Reader
@@ -23,6 +22,7 @@ from bs4 import BeautifulSoup
 from py_helpers.env import load_env
 from py_helpers.pg import get_postgres_query, write_postgres_df, execute_postgres_query
 from py_helpers.ocr.easyocr import easyocr_to_df, draw_easyocr_output, get_bb_darkness
+from py_helpers.misc import anti_join
 
 load_env()
 validation_log = {}
@@ -149,7 +149,7 @@ existing_data = get_postgres_query(
     f"""
     SELECT CAST(vdate AS VARCHAR) AS vdate, varname
     FROM forecast_values_v2
-    WHERE 
+    WHERE
         forecast = 'wfc' 
         AND varname IN ({','.join(["'" + x + "'" for x in varnames_map['varname'].tolist()])})
     GROUP BY 1, 2
@@ -158,9 +158,7 @@ existing_data = get_postgres_query(
 
 # Anti join desired data to existing data - returns vdates with ANY missing varname
 parse_vdates =\
-    desired_data\
-    .merge(existing_data, how = 'outer', indicator = True, on = ['vdate', 'varname'])\
-    .pipe(lambda df: df[df._merge == 'left_only'].drop('_merge', axis = 1))\
+    anti_join(desired_data, existing_data, on = ['vdate', 'varname'])\
     .sort_values(by = 'vdate')\
     ['vdate']\
     .drop_duplicates()\
@@ -374,10 +372,7 @@ if len(parse_vdates) > 0:
 #%% ------- Write to SQL
 if len(parse_vdates) > 0:
 
-    utc_now = datetime.now(pytz.utc)
-    est = pytz.timezone('US/Eastern')
-    est_now = utc_now.astimezone(est)
-    est_date = est_now.strftime('%Y-%m-%d')
+    today_string = datetime.now(ZoneInfo('US/Eastern')).strftime('%Y-%m-%d')
 
     df_to_write =\
         final_forecast\
@@ -386,18 +381,25 @@ if len(parse_vdates) > 0:
             freq = 'q',
             form = 'd1', 
             date = lambda df: pd.PeriodIndex(df['date'], freq='Q').to_timestamp().strftime('%Y-%m-%d'),
-            mdate = est_date
+            mdate = today_string
         )[['forecast', 'vdate', 'freq', 'form', 'varname', 'date', 'value', 'mdate']]
     
+    # df_to_write should already avoid adding repeated (vdate, varname) values to the previous 
+    #  anti_join, this is just a check for safety.
+    existing_forecast_combinations = get_postgres_query(
+        'SELECT forecast, varname, vdate FROM forecast_values_v2 GROUP BY 1, 2, 3'
+    )
+
+    store_df = anti_join(df_to_write, existing_forecast_combinations, on = ['forecast', 'varname', 'vdate'])
+
     rows = write_postgres_df(
-        df_to_write, 
+        store_df, 
         'forecast_values_v2', 
         """
         ON CONFLICT (mdate, forecast, vdate, form, freq, varname, date) 
-        DO UPDATE SET
-            value=EXCLUDED.value
+        DO UPDATE SET value=EXCLUDED.value
         """,
-        split_size = 200
+        split_size = 1_000
     )
     execute_postgres_query('REFRESH MATERIALIZED VIEW CONCURRENTLY forecast_values_v2_all')
     execute_postgres_query('REFRESH MATERIALIZED VIEW CONCURRENTLY forecast_values_v2_latest')
@@ -406,6 +408,3 @@ if len(parse_vdates) > 0:
 
 else:
     validation_log['rows_added'] = 0
-
-
-# %%
