@@ -154,6 +154,8 @@ local({
 ## 4. AFX  ----------------------------------------------------------
 local({
 
+	message(str_glue('*** Importing AFX Data | {format(now(), "%H:%M")}'))
+
 	afx_data =
 		request('https://us-central1-ameribor.cloudfunctions.net/api/rates') %>%
 		req_perform %>%
@@ -181,6 +183,8 @@ local({
 ## 5. ECB ---------------------------------------------------------------------
 local({
 
+	message(str_glue('*** Importing ECB Data | {format(now(), "%H:%M")}'))
+
 	estr_data =
 		request('https://data.ecb.europa.eu/data-detail-api/EST.B.EU000A2X2A25.WT') %>%
 		req_perform %>%
@@ -193,10 +197,59 @@ local({
 	hist$raw$ecb <<- estr_data
 })
 
-
-
-## 6. BOE ---------------------------------------------------------------------
+## 6. EURIBOR ---------------------------------------------------------------------
 local({
+
+	message(str_glue('*** Importing Euribor Data | {format(now(), "%H:%M")}'))
+
+	years_to_iterate =
+		tibble(years_start = -6:-1) %>%
+		mutate(
+			.,
+			years_end = years_start + 1,
+			start_ts = as.numeric(as.POSIXct(today('US/Eastern') + years(years_start) + days(1), tz = 'US/Eastern')) * 1000,
+			end_ts = as.numeric(as.POSIXct(today('US/Eastern') + years(years_end), tz = 'US/Eastern')) * 1000,
+			)
+
+	euribor_raw_data = map(df_to_list(years_to_iterate), function(row) {
+		url = str_glue(
+			'https://www.euribor-rates.eu/umbraco/api/euriborpageapi/highchartsdata?series[0]=1',
+			'&minticks={format(row$start_ts, scientific = F)}&maxticks={format(row$end_ts, scientific = F)}'
+		)
+		request(url) %>%
+			req_headers(
+				'Referer' = 'https://www.euribor-rates.eu/en/current-euribor-rates/2/euribor-rate-3-months/',
+				'Sec-Fetch-Mode' = 'cors',
+			) %>%
+			req_perform() %>%
+			resp_body_json() %>%
+			.[[1]] %>%
+			.$Data
+	})
+
+	euribor_cleaned_data = list_rbind(map(euribor_raw_data, function(raw_data) {
+		list_rbind(map(raw_data, \(row)
+		tibble(
+			date = as_date(as_datetime(row[[1]]/1000)),
+			value = row[[2]]
+			)
+		)) %>%
+		filter(., date >= as_date(IMPORT_DATE_START)) %>%
+		transmute(., varname = 'euribor03m', freq = 'd', date, vdate = date + days(1), value)
+	}))
+
+	euribor_data =
+		euribor_cleaned_data %>%
+		distinct(varname, freq, date, vdate, value) %>%
+		arrange(date)
+
+	hist$raw$euribor <<- euribor_data
+})
+
+## 7. BOE ---------------------------------------------------------------------
+local({
+
+	message(str_glue('*** Importing BoE Data | {format(now(), "%H:%M")}'))
 
 	# Bank rate
 	boe_keys = tribble(
@@ -232,7 +285,7 @@ local({
 	hist$raw$boe <<- boe_data
 })
 
-## 7. Calculated Variables ----------------------------------------------------------
+## 8. Calculated Variables ----------------------------------------------------------
 local({
 
 	message('*** Adding Calculated Variables')
@@ -388,7 +441,7 @@ local({
 	hist$raw$calc <<- hist_calc
 })
 
-## 8. Verify ----------------------------------------------------------
+## 9. Verify ----------------------------------------------------------
 local({
 
 	missing_varnames = variable_params$varname[!variable_params$varname %in% unique(bind_rows(hist$raw)$varname)]
@@ -398,7 +451,7 @@ local({
 })
 
 
-## 9. Aggregate Frequencies ----------------------------------------------------------
+## 10. Aggregate Frequencies ----------------------------------------------------------
 local({
 
 	message(str_glue('*** Aggregating Monthly & Quarterly Data | {format(now(), "%H:%M")}'))
@@ -410,9 +463,9 @@ local({
 			filter(hist$raw$fred, !varname %in% unique(.$varname)),
 			filter(hist$raw$treas, !varname %in% unique(.$varname)),
 			filter(hist$raw$yahoo, !varname %in% unique(.$varname)),
-			# filter(hist$raw$bloom, !varname %in% unique(.$varname)),
 			filter(hist$raw$afx, !varname %in% unique(.$varname)),
 			filter(hist$raw$ecb, !varname %in% unique(.$varname)),
+			filter(hist$raw$euribor, !varname %in% unique(.$varname)),
 			filter(hist$raw$boe, !varname %in% unique(.$varname))
 		)
 
