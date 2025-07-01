@@ -67,14 +67,13 @@ get_cookies = function(response, split = T) {
 #'
 #' @param requests_to_send A list of `httr2` request objects to send.
 #' @param .retries The number of retry attempts before failing.
-#' @param .pool A pool object returns by `curl:::new_pool`.
+#' @param .max_active The max number of active connections.
 #' @param .verbose If TRUE, outputs error statuses.
 #'
 #' @import dplyr purrr httr2
-#' @importFrom curl new_pool
 #'
 #' @noRd
-retry_requests = function(requests_to_send, .retries = 0L, .max_retries = 5L, .pool = new_pool(total_con = 4, host_con = 4, multiplex = T), .verbose = T) {
+retry_requests = function(requests_to_send, .retries = 0L, .max_retries = 5L, .max_active = 4, .verbose = T) {
 
 	stopifnot(
 		is_list(requests_to_send),
@@ -89,7 +88,7 @@ retry_requests = function(requests_to_send, .retries = 0L, .max_retries = 5L, .p
 	}
 
 	responses = setNames(
-		req_perform_parallel(reqs = requests_to_send, pool = .pool, on_error = 'continue'),
+		req_perform_parallel(reqs = requests_to_send, max_active = .max_active, on_error = 'continue'),
 		names(requests_to_send)
 	)
 
@@ -106,7 +105,7 @@ retry_requests = function(requests_to_send, .retries = 0L, .max_retries = 5L, .p
 			requests_to_send[failure_response_ids],
 			.retries = .retries + 1,
 			.max_retries = .max_retries,
-			.pool = .pool,
+			.max_active = .max_active,
 			.verbose = .verbose
 			)
 
@@ -141,7 +140,6 @@ retry_requests = function(requests_to_send, .retries = 0L, .max_retries = 5L, .p
 #' ))
 #'
 #' @import dplyr purrr httr2
-#' @importFrom curl new_pool
 #'
 #' @export
 send_async_requests = function(reqs_list, .chunk_size = 10, .max_conn = .chunk_size, .max_retries = 5, .verbose = T) {
@@ -162,7 +160,7 @@ send_async_requests = function(reqs_list, .chunk_size = 10, .max_conn = .chunk_s
 			requests_chunk,
 			.retries = 0,
 			.max_retries = .max_retries,
-			.pool = new_pool(total_con = .max_conn, host_con = .max_conn, multiplex = T),
+			.max_active = .max_conn,
 			.verbose = .verbose
 			))
 	})

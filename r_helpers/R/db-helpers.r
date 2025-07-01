@@ -242,10 +242,15 @@ store_forecast_values_v2 = function(db, df, .store_new_only = F, .verbose = F) {
 
 	today_string = today('US/Eastern')
 
-	# Time misalignment issue - bneed to use forecast x vdate x varname combination instead of forecast x vdate,
+	# Time misalignment issue - need to use forecast x vdate x varname combination instead of forecast x vdate,
 	# due to some variables coming in later for the same forecast
 	existing_forecast_combinations = get_query(db, sql("SELECT forecast, varname, vdate FROM forecast_values_v2 GROUP BY 1, 2, 3"))
-	store_df = anti_join(df, existing_forecast_combinations, by = c('forecast', 'varname', 'vdate'))
+
+	if (.store_new_only) {
+		store_df = anti_join(df, existing_forecast_combinations, by = c('forecast', 'varname', 'vdate'))
+	} else {
+		store_df = df
+	}
 
 	if (nrow(store_df) > 0) {
 
@@ -258,7 +263,6 @@ store_forecast_values_v2 = function(db, df, .store_new_only = F, .verbose = F) {
 			.verbose = .verbose
 			)
 	}
-
 
 	final_count = get_rowcount(db, 'forecast_values_v2')
 	rows_added = final_count - initial_count
