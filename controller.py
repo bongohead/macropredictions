@@ -18,6 +18,7 @@ import sys
 from datetime import datetime
 from dotenv import load_dotenv
 from contextlib import redirect_stdout
+from py_helpers.exceptions import SkipRun # Special class to allow for exceptions flagged as successes.
 
 # Load Args ---------------------------------------------------------------
 parser = argparse.ArgumentParser(description='Python controller.')
@@ -57,13 +58,19 @@ try:
 
     script_output = {
        'success': True,
-       'validation_log': validation_log if 'validation_log' in globals() else None,
+       'validation_log': globals().get('validation_log'),
+       'err_message': None
+    }
+except SkipRun as e:
+    script_output = {
+       'success': True,
+       'validation_log': globals().get('validation_log'),
        'err_message': None
     }
 except Exception as e:
     script_output = {
        'success': False,
-       'validation_log': validation_log if 'validation_log' in globals() else None,
+       'validation_log': globals().get('validation_log'),
        'err_message': str(e)
     }
 
