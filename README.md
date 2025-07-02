@@ -75,8 +75,12 @@ Server Structure:
 ## Changelog
 
 ## v3.1.1 - 2025.06
-- Deprecated Bloomberg data sources due to BSBY index removal
-- Deprecated futures-based AMB forecasts ingestion due to CBOE discontinuation; replaced with mean-reverting spread over SOFR
+- **External forecasts**
+	- Deprecated Bloomberg data sources due to BSBY index removal
+	- Deprecated futures-based AMB forecasts ingestion due to CBOE discontinuation; replaced with mean-reverting spread over SOFR
+	- Added LLM-based multimodal screenshot scrapes for CB
+- **Python helpers**
+	- Added `async_run` and `SkipRun` helpers to support more Python scripting logic.
 
 ### v3.1.0 - 2024.10
 - Fixed broken external scrapers
