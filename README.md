@@ -58,18 +58,18 @@ This package will be available through `library(macropredictions)`.
 ## For internal users
 Please see the wiki pages on [server maintenance](https://wiki.macropredictions.com/books/system-overview/page/server-administration) to setup your dev environment and access GUI interfaces. See [data flow structure](https://wiki.macropredictions.com/books/system-overview/page/data-flow-structure) to understand the data flow between models and data stores.
 
-Database Structure:
-![Database](./docs/db.png)
+### Database Structure
+![Database](./docs/db-2025q3.png)
 
-Server Structure:
-![Server 2](./docs/server.png)
+### Server Structure
+![Server 2](./docs/server-2025q3.png)
 
 
 ## Usage
 **Running module scripts**
 1. TBD
 
-(For internal users) You can still call modules directly for testing. However, for productionalizing, cronjobs should instead use controller.py (for Python modules) or controller.r for R modules.
+(For internal users) You can still call modules directly for testing. However, for productionalizing, cronjobs should instead use `controller.py` (for Python modules) or `controller.r` for R modules.
 
 
 ## Changelog
