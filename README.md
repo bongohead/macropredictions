@@ -74,7 +74,7 @@ Server Structure:
 
 ## Changelog
 
-## v3.1.1 - 2025.06
+## v3.1.1 - 2025.07
 - **External forecasts**
 	- Deprecated Bloomberg data sources due to BSBY index removal
 	- Deprecated futures-based AMB forecasts ingestion due to CBOE discontinuation; replaced with mean-reverting spread over SOFR

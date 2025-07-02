@@ -21,6 +21,7 @@ from py_helpers.image_cleaners import resize_image
 from py_helpers.llm import get_llm_responses_openai
 from py_helpers.misc import anti_join
 from py_helpers.exceptions import SkipRun
+from py_helpers.async_helpers import async_run
 
 load_env()
 validation_log = {}
@@ -67,7 +68,7 @@ async def get_publication_date() -> str:
         await browser.close()
         return iso_date
     
-available_vdate = await get_publication_date()
+available_vdate = async_run(get_publication_date())
 print(f'Currently available vdate: {available_vdate}')
 validation_log['available_vdate'] = available_vdate
 
@@ -95,7 +96,7 @@ async def screenshot_to_b64_async(url, width = 800, height = 600):
     display(HTML(f'<img src="data:image/webp;base64,{webp_b64}" width="500"/>'))
     return webp_b64
 
-img_b64 = await screenshot_to_b64_async('https://datawrapper.dwcdn.net/KboSH/')
+img_b64 = async_run(screenshot_to_b64_async('https://datawrapper.dwcdn.net/KboSH/'))
 
 #%% ------- Prepare input prompt
 system_prompt =\
@@ -174,7 +175,7 @@ def parse_response(llm_response, attempt_index):
             'llm_response_err': str(e)
         }
 
-raw_llm_responses = await get_llm_responses_openai(
+raw_llm_responses = async_run(get_llm_responses_openai(
     all_prompts,
     params = {
         'model': 'o4-mini',
@@ -184,7 +185,7 @@ raw_llm_responses = await get_llm_responses_openai(
     batch_size = 3,
     max_retries = 2,
     api_key = os.getenv('OPENAI_API_KEY')
-)
+))
 
 parsed_results = [
     parse_response(llm_response, i)
