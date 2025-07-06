@@ -6,6 +6,7 @@
 #' - Bloomberg indices: day of/realtime (but still assume 1 day lag, see hist BLOOM sec)
 #' - AFX indices: 1 day lag (updated next-day at 8am ET)
 #' - BOE: 1 day lag
+#' - Euribor: 1 day lag
 #' - Futures: 1 day lag: (updated same-day at 3pm ET)
 
 # Initialize ----------------------------------------------------------
@@ -62,6 +63,8 @@ local({
 ## TREAS ----------------------------------------------------------
 local({
 
+	message('***** Importing UST Data')
+
 	treasury_data =
 		get_treasury_yields() %>%
 		pivot_wider(., id_cols = c(date), names_from = varname, values_from = value) %>%
@@ -87,6 +90,8 @@ local({
 
 ## AFX  ----------------------------------------------------------
 local({
+
+	message('***** Importing AFX Data')
 
 	afx_data =
 		request('https://us-central1-ameribor.cloudfunctions.net/api/rates') %>%
@@ -116,6 +121,8 @@ local({
 
 ## BOE  ----------------------------------------------------------
 local({
+
+	message('***** Importing BoE Data')
 
 	boe_keys = tribble(
 		~ varname, ~ url,
@@ -158,6 +165,8 @@ local({
 ## Yahoo -----------------------------------------------------------
 local({
 
+	message('***** Importing Yahoo Data')
+
 	sp500 =
 		get_yahoo_data('^GSPC') %>%
 		mutate(., value = (value/dplyr::lag(value, 90) - 1) * 100) %>%
@@ -169,6 +178,52 @@ local({
 		transmute(., vdate = date + days(1), varname = 'vix', date = date, freq = 'd', value)
 
 	hist$yahoo <<- bind_rows(sp500, vix)
+})
+
+## Euribor -----------------------------------------------------------
+local({
+
+	message('***** Importing Euribor Data')
+
+	years_to_iterate =
+		tibble(years_start = -6:-1) %>%
+		mutate(
+			.,
+			years_end = years_start + 1,
+			start_ts = as.numeric(as.POSIXct(today('US/Eastern') + years(years_start) + days(1), tz = 'US/Eastern')) * 1000,
+			end_ts = as.numeric(as.POSIXct(today('US/Eastern') + years(years_end), tz = 'US/Eastern')) * 1000,
+		)
+
+	euribor_raw_data = map(df_to_list(years_to_iterate), function(row) {
+		url = str_glue(
+			'https://www.euribor-rates.eu/umbraco/api/euriborpageapi/highchartsdata?series[0]=1',
+			'&minticks={format(row$start_ts, scientific = F)}&maxticks={format(row$end_ts, scientific = F)}'
+		)
+		request(url) %>%
+			req_headers(
+				'Referer' = 'https://www.euribor-rates.eu/en/current-euribor-rates/2/euribor-rate-3-months/',
+				'Sec-Fetch-Mode' = 'cors',
+			) %>%
+			req_perform() %>%
+			resp_body_json() %>%
+			.[[1]] %>%
+			.$Data
+	})
+
+	euribor_cleaned_data = list_rbind(map(euribor_raw_data, function(raw_data) {
+		list_rbind(map(raw_data, \(row) {
+			   return(tibble(date = as_date(as_datetime(row[[1]]/1000)), value = row[[2]]))
+			})) %>%
+			filter(., date >= '2010-01-01') %>%
+			transmute(., varname = 'euribor03m', freq = 'd', date, vdate = date + days(1), value)
+	}))
+
+	euribor_data =
+		euribor_cleaned_data %>%
+		distinct(varname, freq, date, vdate, value) %>%
+		arrange(date)
+
+	hist$euribor <<- euribor_data
 })
 
 ## Store in SQL ----------------------------------------------------------
@@ -205,7 +260,7 @@ local({
 
 # Sub-Models  ----------------------------------------------------------
 
-## FFR/SOFR/BSBY  ----------------------------------------------------------
+## FFR/SOFR  ----------------------------------------------------------
 local({
 
 	backtest_vdates = seq(
@@ -221,7 +276,7 @@ local({
 		FROM interest_rate_model_futures_values
 		WHERE
 			(
-				varname IN ('bsby', 'ffr')
+				varname IN ('ffr')
 				OR (varname IN ('sofr') AND tenor = '3m')
 			)
 			AND is_final IS TRUE
@@ -231,7 +286,6 @@ local({
 	))
 
 	# Want to create a dataframe with months out starting at 0 and until max available data (or 120 for ffr)
-	# 5/28 - BSBY removed from below line
 	raw_data =
 		expand_grid(vdate = backtest_vdates, varname = c('ffr', 'sofr'), months_out = 0:120) %>%
 		mutate(., date = floor_date(vdate, 'month') %m+% months(months_out), min_tradedate = vdate - days(7)) %>%
@@ -250,8 +304,8 @@ local({
 				(varname != 'ffr' & months_out <= max_months_out)
 			)
 
-	# Backfill start-0 values with historical data if there's no forecast (BSBY & SOFR issues)
-	hist_daily = filter(hist_values, freq == 'd' & varname %in% c('ffr', 'bsby', 'sofr'))
+	# Backfill start-0 values with historical data if there's no forecast (SOFR issues)
+	hist_daily = filter(hist_values, freq == 'd' & varname %in% c('ffr', 'sofr'))
 
 	# Get existing same-month mean values for each vdate
 	hist_by_vdate =
@@ -347,40 +401,49 @@ local({
 	submodels$cme <<- smoothed_data
 })
 
-## SONIA/BR  ----------------------------------------------------------
+## SONIA/BOE/EURIBOR  ----------------------------------------------------------
 local({
 
+	# 1. Build set of valuation dates
 	backtest_vdates = seq(
 		from = today('US/Eastern') %m-% months(BACKTEST_MONTHS),
 		to = today('US/Eastern'),
 		by = '1 day'
 	)
 
-	# vdate in futures table represents trade dates, not pull dates!
+	# 2. Pull futures data - note vdate in futures table represents trade dates, not pull dates!
 	futures_df = get_query(pg, str_glue(
 		"SELECT varname, tradedate, expdate AS date, tenor, value
 		FROM interest_rate_model_futures_values
 		WHERE
 			scrape_source = 'bc'
-			AND varname IN ('sonia', 'estr')
+			AND varname IN ('sonia', 'estr', 'euribor')
 			AND is_final IS TRUE
 			AND tradedate >= '{min_tradedate}'",
 		min_tradedate = backtest_vdates[1] - days(7)
 	))
 
+	# 3. Get (varname, tradedate, date) level data
 	raw_data_0 =
 		futures_df %>%
-		# Now use only one-month futures if it's the only available data
+		# Use min tenors; 1m for SONIA/ESTR, 3m for Euribor
 		group_by(varname, tradedate, date) %>%
 		filter(., tenor == min(tenor)) %>%
 		arrange(., date) %>%
 		ungroup %>%
-		# Get rid of forecasts for old observations
+		# Get rid of 'forecasts' for old observations
 		filter(., date >= floor_date(tradedate, 'month')) %>%
 		transmute(., varname, tradedate, date, value)
 
+	# 4. Fill in each (vdate x months out) with recent data
+	# For each vdate, pick the most recent trade no more than 7 days old relative to the valuation date
+	# Can result in empties
 	raw_data =
-		expand_grid(vdate = backtest_vdates, varname = c('sonia', 'estr'), months_out = 0:120) %>%
+		expand_grid(
+			vdate = backtest_vdates,
+			varname = c('sonia', 'estr', 'euribor'),
+			months_out = 0:120
+		) %>%
 		mutate(., date = floor_date(vdate, 'month') %m+% months(months_out), min_tradedate = vdate - days(7)) %>%
 		left_join(raw_data_0, join_by(varname, date, closest(vdate >= tradedate), min_tradedate <= tradedate)) %>%
 		mutate(., max_months_out = max(ifelse(is.na(value), 0, months_out)), .by = c(vdate, varname)) %>%
@@ -389,10 +452,13 @@ local({
 		# Keep month-forward forecasts if leq max_months_out (or for ffr, keep through 60 months min)
 		filter(., months_out <= max_months_out)
 
-	# Backfill start-0 values with historical data if there's no forecast
-	hist_daily = filter(hist_values, freq == 'd' & varname %in% c('sonia', 'estr'))
+	# 5. Fill month-0 values with realized data if there's no forecast
+	# Pull realized daily rates
+	hist_daily =
+		filter(hist_values, freq == 'd' & varname %in% c('sonia', 'estr', 'euribor03m')) %>%
+		mutate(varname = ifelse(varname == 'euribor03m', 'euribor', varname))
 
-	# Get existing same-month mean values for each vdate, and the prev-month final values
+	# For each vdate, get existing hist data for the same month as the vdate
 	hist_by_vdate =
 		distinct(hist_daily, varname, vdate) %>%
 		mutate(., date = floor_date(vdate, 'month')) %>%
@@ -404,6 +470,7 @@ local({
 		group_by(., varname, vdate, date) %>%
 		summarize(., month_avg = mean(value), .groups = 'drop')
 
+	# Fill in raw_data with hist_by_vdate
 	filled_data =
 		raw_data %>%
 		left_join(
@@ -426,11 +493,12 @@ local({
 		mutate(., value = ifelse(is.na(value), hist_d_value, value)) %>%
 		select(., vdate, varname, months_out, date, value, max_months_out)
 
-	# Check if any vdate is missing data
+	# Check if any vdate is missing current-month data
 	filled_data %>%
 		filter(., months_out == 0 & is.na(value)) %>%
 		summarize(., missing = sum(is.na(value)), .by = 'varname')
 
+	# 6. linearly interpolate any remaining gaps
 	ice_data =
 		filled_data %>%
 		group_by(., vdate, varname) %>%
@@ -439,14 +507,14 @@ local({
 		filter(., months_out <= 60) %>%
 		transmute(
 			.,
-			varname,
+			varname = ifelse(varname == 'euribor', 'euribor03m', varname),
 			freq = 'm',
 			vdate,
 			date,
 			value
 		)
 
-	## Now calculate BOE Bank Rate
+	# 7. Now calculate BOE Bank Rate
 	spread_df =
 		hist$boe %>%
 		filter(freq == 'd') %>%
@@ -455,7 +523,8 @@ local({
 
 	spread_df %>%
 		ggplot(.) +
-		geom_line(aes(x = date, y = spread))
+		geom_line(aes(x = date, y = spread)) +
+		labs(title = 'UKBR - SONIA Spread')
 
 	# Monthly baserate forecasts (daily forecasts can be calculated later; see ENG section)
 	ukbankrate =
@@ -2134,132 +2203,6 @@ local({
 
 	submodels$real <<- real_final
 })
-
-## AMB (Old) ---------------------------------------------------------------------
-# local({
-#
-# 	# AMB1
-# 	# AMT1 <->
-# 	# Get FFR spread <-> compare historical change from AMERIBOR
-# 	backtest_vdates = seq(
-# 		from = max(today('US/Eastern') %m-% months(BACKTEST_MONTHS), as_date('2023-07-01')),
-# 		# Ameribor missing close-dates before that
-# 		to = today('US/Eastern'),
-# 		by = '1 day'
-# 	)
-#
-# 	# vdate in futures table represents trade dates, not pull dates!
-# 	futures_df = get_query(pg, str_glue(
-# 		"SELECT varname, tradedate, expdate AS date, tenor, value
-# 		FROM interest_rate_model_futures_values
-# 		WHERE
-# 			scrape_source = 'cboe'
-# 			AND varname IN ('ameribor')
-# 			AND is_final IS TRUE
-# 			AND tenor = '30d'
-# 			AND tradedate >= '{min_tradedate}'",
-# 		min_tradedate = backtest_vdates[1] - days(7)
-# 	))
-#
-# 	raw_data =
-# 		expand_grid(vdate = backtest_vdates, varname = c('ameribor'), months_out = 0:60) %>%
-# 		mutate(., date = floor_date(vdate, 'month') %m+% months(months_out), min_tradedate = vdate - days(7)) %>%
-# 		left_join(futures_df, join_by(varname, date, closest(vdate >= tradedate), min_tradedate <= tradedate)) %>%
-# 		mutate(., max_months_out = max(ifelse(is.na(value), 0, months_out)), .by = c(vdate, varname)) %>%
-# 		filter(., max_months_out != 0) # Keep vdate x varnames with at least some non-NA values
-#
-# 	# Backfill start-0 values with historical data if there's no forecast
-# 	hist_daily = filter(bind_rows(hist), freq == 'd' & varname %in% c('ameribor'))
-#
-# 	# Get existing same-month mean values for each vdates
-# 	hist_by_vdate =
-# 		distinct(hist_daily, varname, vdate) %>%
-# 		mutate(., date = floor_date(vdate, 'month')) %>%
-# 		inner_join(
-# 			.,
-# 			transmute(hist_daily, varname, trailing_vdate = vdate, value, date = floor_date(date, 'month')),
-# 			join_by(date, varname, vdate >= trailing_vdate)
-# 		) %>%
-# 		group_by(., varname, vdate, date) %>%
-# 		summarize(., month_avg = mean(value), .groups = 'drop')
-#
-# 	filled_data =
-# 		raw_data %>%
-# 		left_join(
-# 			.,
-# 			transmute(hist_by_vdate, varname, hist_vdate = vdate, date, months_out = 0, month_avg),
-# 			join_by(varname, months_out, date, closest(vdate >= hist_vdate))
-# 		) %>%
-# 		mutate(., value = ifelse(is.na(value), month_avg, value)) %>%
-# 		# Some are still empty, so join in last available data as well even if not in the same month
-# 		left_join(
-# 			.,
-# 			transmute(
-# 				hist_daily, varname, months_out = 0,
-# 				hist_d_date = date, hist_d_vdate = vdate, hist_d_value = value
-# 			),
-# 			join_by(varname, months_out, date >= hist_d_date, closest(vdate >= hist_d_vdate))
-# 		) %>%
-# 		# Needed in case there are different hist_d_dates with same hist_d_vdate
-# 		slice_max(., hist_d_date, by = c(vdate, varname, date)) %>%
-# 		mutate(., value = ifelse(is.na(value), hist_d_value, value)) %>%
-# 		select(., vdate, varname, months_out, date, value, max_months_out)
-#
-# 	# Check if any vdate is missing data
-# 	filled_data %>%
-# 		filter(., months_out == 0 & is.na(value)) %>%
-# 		summarize(., missing = sum(is.na(value)), .by = 'varname')
-#
-# 	cboe_data =
-# 		filled_data %>%
-# 		left_join(
-# 			.,
-# 			hist$afx %>%
-# 				filter(., varname == 'ameribor') %>%
-# 				slice_max(., date, with_ties = F, by = vdate) %>%
-# 				transmute(., afx_vdate = vdate, ameribor_hist = value),
-# 			join_by(closest(vdate >= afx_vdate))
-# 		) %>%
-# 		left_join(
-# 			.,
-# 			hist$fred %>%
-# 				filter(., varname == 'sofr') %>%
-# 				slice_max(., date, with_ties = F, by = vdate) %>%
-# 				transmute(., ffr_vdate = vdate, ffr_hist = value),
-# 			join_by(closest(vdate >= ffr_vdate))
-# 		) %>%
-# 		inner_join(
-# 			.,
-# 			submodels$cme %>% filter(., varname == 'sofr') %>% transmute(vdate, date, ffr_pred = value),
-# 			join_by(date, vdate)
-# 		) %>%
-# 		group_split(., vdate) %>%
-# 		map(., function(df) {
-# 			# 50% FFR + Ameribor constant spread, 50% Ameribor futures
-# 			df %>%
-# 				mutate(., value = zoo::na.locf(value)) %>%
-# 				mutate(., ffr_based_forecast = ameribor_hist - ffr_hist + ffr_pred) %>%
-# 				mutate(., value = .15 * value + .85 * ffr_based_forecast)
-# 		}) %>%
-# 		list_rbind() %>%
-# 		transmute(., vdate, date, freq = 'm', value, varname = 'ameribor')
-#
-# 	# Plot comparison against TDNS
-# 	cboe_plot =
-# 		cboe_data %>%
-# 		filter(., vdate == max(vdate)) %>%
-# 		bind_rows(
-# 			.,
-# 			filter(submodels$cme, varname == 'ffr' & vdate == max(vdate)),
-# 			filter(submodels$cme, varname == 'sofr' & vdate == max(vdate))
-# 			) %>%
-# 		ggplot(.) +
-# 		geom_line(aes(x = date, y = value, color = varname, group = varname))
-#
-# 	print(cboe_plot)
-#
-# 	submodels$cboe <<- cboe_data
-# })
 
 
 ## AMB ---------------------------------------------------------------------
