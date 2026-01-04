@@ -207,14 +207,15 @@ for i, vdate in (enumerate(parse_vdates)):
         height_ths = 1.0 # maximum difference in y height to shift boxes
     ))
 
-    # draw_easyocr_output(img, ocr_df, f'{save_dir}/parse/{vdate}-00-prestrip.png')
+    draw_easyocr_output(img, ocr_df, f'{save_dir}/parse/{vdate}-00-prestrip.png')
 
     # Get the upper and right bounding box; second instance of word "actual" 
-    if len(ocr_df[ocr_df['text'] == 'Actual']) != 2:
+    if len(ocr_df[ocr_df['text'].str.match(r"^Actual[^A-Za-z]*$", na = False)]) != 2:
         raise Exception('Unable to find upper & right bound - count of "actual" not 2')
 
+    # Allow for any text that matches "Actual" with possible trailing non-letters
     actual_box =\
-        ocr_df[ocr_df['text'] == 'Actual']\
+        ocr_df[ocr_df['text'].str.match(r"^Actual[^A-Za-z]*$", na = False)]\
         .pipe(lambda df: df[df['tl_x'] == df['tl_x'].max()])\
         .to_dict('records')[0]
     
