@@ -91,8 +91,11 @@ local({
 			flavor = 'stream',
 			# Below needed to prevent split wrapping columns correctly https://www.fanniemae.com/media/42376/display
 			column_tol = -3.5, # -5
-			edge_tol = 60 # 60
-			#table_areas = list('100, 490, 700, 250')
+			edge_tol = {
+				if (str_detect(x$econ_forecast_path, '2025-09-23')) 30
+				else 60
+			}, # 60
+			# table_areas = list('100, 490, 700, 250')
 			)[0]$df %>%
 			as_tibble(.)
 
@@ -149,7 +152,10 @@ local({
 			pages = '1',
 			flavor = 'stream',
 			column_tol = -1,
-			edge_tol = 60
+			edge_tol = {
+				if (str_detect(x$housing_forecast_path, '2025-09-23')) 30
+				else 60
+			}, # 60
 			)[0]$df %>%
 			as_tibble(.)
 
@@ -209,7 +215,7 @@ local({
 })
 
 
-## Export Forecast ------------------------------------------------------------------
+ ## Export Forecast ------------------------------------------------------------------
 local({
 
 	# Store in SQL

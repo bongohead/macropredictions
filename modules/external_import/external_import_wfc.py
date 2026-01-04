@@ -18,6 +18,7 @@ from PIL import Image
 
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 from py_helpers.env import load_env
 from py_helpers.pg import get_postgres_query, write_postgres_df, execute_postgres_query
@@ -56,15 +57,34 @@ def download_raw_svgs():
     
     svg_files = [f.stem for f in Path(save_dir + '/svgs').glob('*.svg')]
     pages_with_link = [p for p in get_pages() if p['vdate'] not in svg_files]
+    print(pages_with_link)
 
     # Get link
     def get_svg_link(url: str) -> str:
         resp = requests.get(url)
         soup = BeautifulSoup(resp.text, 'html.parser')
         h3_el = soup.find('h3', string = 'U.S. Forecast Table')
-        src = h3_el.find_next('table', class_ = 'bm-img-table').find('img').get('bm-img-svg')
-        abs_src = 'https://wellsfargo.bluematrix.com/images/' + src.split('image:')[1]
-        return abs_src
+        if h3_el is None:
+            raise Exception("Could not find 'U.S. Forecast Table' section.")
+
+        table_el = h3_el.find_next('table', class_ = 'bm-img-table')
+        if table_el is None:
+            raise Exception("Could not find forecast table element with class 'bm-img-table'.")
+
+        img_el = table_el.find('img')
+        if img_el is None:
+            raise Exception("Could not find <img> element inside 'bm-img-table'.")
+
+        src = img_el.get('bm-img-svg') or img_el.get('src')
+        if not src:
+            raise Exception("Could not find SVG source attribute on <img> (expected 'bm-img-svg' or 'src').")
+
+        # Older pages used a BlueMatrix-specific 'image:' scheme; newer pages provide a direct SVG URL in 'src'.
+        if 'image:' in src:
+            src = src.split('image:', 1)[1]
+            return urljoin('https://wellsfargo.bluematrix.com/images/', src)
+
+        return urljoin(url, src)
     
     pages_with_img_link = [{**p, 'img_href': get_svg_link(p['href'])} for p in pages_with_link]
 
@@ -408,3 +428,5 @@ if len(parse_vdates) > 0:
 
 else:
     validation_log['rows_added'] = 0
+
+# %%

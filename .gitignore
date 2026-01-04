@@ -21,6 +21,7 @@ models/*
 
 # Saved scrapes
 wfc_dump/
+cbo_dump/
 
 # Secrets
 .env
