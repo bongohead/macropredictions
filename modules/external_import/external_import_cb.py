@@ -58,12 +58,26 @@ async def get_publication_date() -> str:
             wait_until = 'networkidle'
         )
         
-        # Wait until the date element is in the DOM & visible.
-        await page.wait_for_selector('.newPDate', state = 'visible', timeout = 5_000)        
-        raw_date = await page.locator('.newPDate').inner_text() # Extract text
-        
-        # Convert to ISO 8601 (YYYY-MM-DD).
-        iso_date = datetime.strptime(raw_date.strip(), '%B %d, %Y').date().isoformat()
+        # Wait until the publication date element is in the DOM & visible.
+        # The site previously exposed this as `.newPDate` but now uses schema.org microdata.
+        date_selector = 'span[itemprop*="datePublished"]'
+        await page.wait_for_selector(date_selector, state = 'visible', timeout = 15_000)
+
+        date_el = page.locator(date_selector).first
+        iso_date = await date_el.get_attribute('content')
+
+        if iso_date:
+            iso_date = iso_date.strip()
+        else:
+            raw_date = (await date_el.inner_text()).strip()
+            for fmt in ('%d %B %Y', '%B %d, %Y'):
+                try:
+                    iso_date = datetime.strptime(raw_date, fmt).date().isoformat()
+                    break
+                except ValueError:
+                    pass
+            else:
+                raise Exception(f"Unable to parse publication date: {raw_date!r}")
 
         await browser.close()
         return iso_date
@@ -178,7 +192,7 @@ def parse_response(llm_response, attempt_index):
 raw_llm_responses = async_run(get_llm_responses_openai(
     all_prompts,
     params = {
-        'model': 'o4-mini',
+        'model': 'gpt-5.2',
         'response_format': {'type': 'json_object'},
         'reasoning_effort': 'high'
     },
@@ -253,8 +267,8 @@ if set(desired_varnames) - set(response_varnames):
     print('Missing extractions:', sorted(set(desired_varnames) - set(response_varnames)))
 
 #%% ------- Cost
-INPUT_COST_PER_1M = 1.1
-OUTPUT_COST_PER_1M = 4.4
+INPUT_COST_PER_1M = 1.75
+OUTPUT_COST_PER_1M = 14
 
 total_cost = np.round(np.sum([
     INPUT_COST_PER_1M/1_000_000 * x['input_tokens'] + OUTPUT_COST_PER_1M/1_000_000 * x['output_tokens']
@@ -319,3 +333,5 @@ if len(cb_forecasts) > 0:
 
 else:
     validation_log['rows_added'] = 0
+
+# %%
