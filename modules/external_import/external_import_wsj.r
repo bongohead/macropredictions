@@ -44,8 +44,12 @@ local({
 		'2024-07-11', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0724.xlsx',
 		'2024-10-14', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon1024.xlsx',
 		'2025-01-19', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0125.xlsx',
-		'2025-04-12', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0425.xlsx'
-	)
+		'2025-04-12', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0425.xlsx',
+		'2025-07-13', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0725.xlsx',
+		'2025-10-15', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon1025.xlsx'
+		)
+
+
 
 	orgs_to_retain <<- orgs_to_retain
 	wsj_search <<- wsj_search
