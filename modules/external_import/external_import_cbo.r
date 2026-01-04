@@ -9,6 +9,7 @@ library(macropredictions)
 library(tidyverse)
 library(httr2)
 library(rvest)
+library(reticulate)
 
 ## Load Connection Info ----------------------------------------------------------
 load_env()
@@ -19,36 +20,35 @@ pg = connect_pg()
 ## CBO Data ----------------------------------------------------------------
 local({
 
-	cbo_vintages = map(0:2, function(page)
-		request(paste0('https://www.cbo.gov/data/publications-with-data-files?page=', page, '')) %>%
-			req_perform %>%
-			resp_body_html %>%
-			html_nodes('#block-cbo-cbo-system-main div.item-list > ul > li') %>%
-			keep(., \(x) str_detect(html_text(html_node(x, 'span.views-field-title')), coll('Economic Outlook'))) %>%
-			map_chr(., \(x) html_text(html_node(x, 'div.views-field-field-display-date')))
-		) %>%
-		unlist %>%
-		mdy %>%
-		tibble(release_date = .) %>%
-		group_by(., month(release_date), year(release_date)) %>%
-		summarize(., release_date = min(release_date), .groups = 'drop') %>%
-		select(., release_date) %>%
-		arrange(., release_date)
-
-	url_params =
-		request('https://www.cbo.gov/data/budget-economic-data') %>%
-		req_perform %>%
-		resp_body_html %>%
-		html_nodes('div .view-content') %>%
-		.[[10]] %>%
-		html_nodes(., 'a') %>%
-		map(., \(x) tibble(date = html_text(x), url = html_attr(x, 'href'))) %>%
-		list_rbind() %>%
-		transmute(., date = mdy(paste0(str_sub(date, 1, 3), ' 1 ' , str_sub(date, -4))), url) %>%
-		mutate(., date = as_date(date)) %>%
-		inner_join(., cbo_vintages %>% mutate(., date = floor_date(release_date, 'months')), by = 'date') %>%
-		transmute(., vdate = release_date, url = paste0('https://www.cbo.gov', url))
-
+	# cbo_vintages = map(0:2, function(page)
+	# 	request(paste0('https://www.cbo.gov/data/publications-with-data-files?page=', page, '')) %>%
+	# 		req_perform %>%
+	# 		resp_body_html %>%
+	# 		html_nodes('#block-cbo-cbo-system-main div.item-list > ul > li') %>%
+	# 		keep(., \(x) str_detect(html_text(html_node(x, 'span.views-field-title')), coll('Economic Outlook'))) %>%
+	# 		map_chr(., \(x) html_text(html_node(x, 'div.views-field-field-display-date')))
+	# 	) %>%
+	# 	unlist %>%
+	# 	mdy %>%
+	# 	tibble(release_date = .) %>%
+	# 	group_by(., month(release_date), year(release_date)) %>%
+	# 	summarize(., release_date = min(release_date), .groups = 'drop') %>%
+	# 	select(., release_date) %>%
+	# 	arrange(., release_date)
+	#
+	# url_params =
+	# 	request('https://www.cbo.gov/data/budget-economic-data') %>%
+	# 	req_perform %>%
+	# 	resp_body_html %>%
+	# 	html_nodes('div .view-content') %>%
+	# 	.[[10]] %>%
+	# 	html_nodes(., 'a') %>%
+	# 	map(., \(x) tibble(date = html_text(x), url = html_attr(x, 'href'))) %>%
+	# 	list_rbind() %>%
+	# 	transmute(., date = mdy(paste0(str_sub(date, 1, 3), ' 1 ' , str_sub(date, -4))), url) %>%
+	# 	mutate(., date = as_date(date)) %>%
+	# 	inner_join(., cbo_vintages %>% mutate(., date = floor_date(release_date, 'months')), by = 'date') %>%
+	# 	transmute(., vdate = release_date, url = paste0('https://www.cbo.gov', url))
 
 	cbo_params = tribble(
 		~ varname, ~ cboname, ~ transform,
@@ -75,21 +75,52 @@ local({
 		'lfpr', 'lfpr_16yo', 'base'
 	)
 
+	# cleaned = map(df_to_list(url_params), function(x) {
+	#
+	# 	if (fs::dir_exists(file.path(tempdir(), 'cbo'))) fs::dir_delete(file.path(tempdir(), 'cbo'))
+	#
+	# 	download.file(x$url, destfile = file.path(tempdir(), 'cbo.zip'), quiet = T)
+	# 	unzip(file.path(tempdir(), 'cbo.zip'), exdir = file.path(tempdir(), 'cbo'), overwrite = T)
+	#
+	# 	quarterly_csvs =
+	# 		fs::dir_ls(file.path(tempdir(), 'cbo'), recurse = T) %>%
+	# 		keep(., \(f) str_detect(str_to_lower(f), 'quarter') & !str_detect(str_to_lower(f), 'potential'))
+	#
+	# 	if (length(quarterly_csvs) != 1) stop('Error, wrong length of matching CSVs')
+	#
+	# 	cleaned_res =
+	# 		read_csv(quarterly_csvs[[1]], col_types = cols(date = col_character(), .default = col_double())) %>%
+	# 		filter(., !is.na(date)) %>%
+	# 		mutate(., date = from_pretty_date(str_to_upper(date), 'q')) %>%
+	# 		select(., c(date, cbo_params$cboname)) %>%
+	# 		mutate(
+	# 			.,
+	# 			across(filter(cbo_params, transform == 'apchg')$cboname, \(x) apchg(x)),
+	# 			across(filter(cbo_params, transform == 'yoy')$cboname, \(x) (x/lag(x, 4) - 1) * 100)
+	# 			) %>%
+	# 		na.omit() %>%
+	# 		filter(., date >= floor_date(as_date(x$vdate), 'quarter')) %>%
+	# 		pivot_longer(., cols = -date, values_to = 'value', names_to = 'cboname') %>%
+	# 		inner_join(., cbo_params, by = 'cboname') %>%
+	# 		transmute(., vdate = as_date(x$vdate), date, varname, value)
+	#
+	# 	fs::dir_delete(file.path(tempdir(), 'cbo'))
+	#
+	# 	return(cleaned_res)
+	# })
+
+	url_params = tribble(
+		~ vdate,
+		as_date('2024-06-18'),
+		as_date('2025-01-17')
+		# as_date('2025-09-12')
+	) %>%
+		mutate(., filepath = paste0(Sys.getenv('MP_DIR'), '/modules/external_import/cbo_dump/', format(vdate, '%Y-%m'), '.csv'))
+
 	cleaned = map(df_to_list(url_params), function(x) {
 
-		if (fs::dir_exists(file.path(tempdir(), 'cbo'))) fs::dir_delete(file.path(tempdir(), 'cbo'))
-
-		download.file(x$url, destfile = file.path(tempdir(), 'cbo.zip'), quiet = T)
-		unzip(file.path(tempdir(), 'cbo.zip'), exdir = file.path(tempdir(), 'cbo'), overwrite = T)
-
-		quarterly_csvs =
-			fs::dir_ls(file.path(tempdir(), 'cbo'), recurse = T) %>%
-			keep(., \(f) str_detect(str_to_lower(f), 'quarter') & !str_detect(str_to_lower(f), 'potential'))
-
-		if (length(quarterly_csvs) != 1) stop('Error, wrong length of matching CSVs')
-
 		cleaned_res =
-			read_csv(quarterly_csvs[[1]], col_types = cols(date = col_character(), .default = col_double())) %>%
+			read_csv(x$filepath, col_types = cols(date = col_character(), .default = col_double())) %>%
 			filter(., !is.na(date)) %>%
 			mutate(., date = from_pretty_date(str_to_upper(date), 'q')) %>%
 			select(., c(date, cbo_params$cboname)) %>%
@@ -104,10 +135,9 @@ local({
 			inner_join(., cbo_params, by = 'cboname') %>%
 			transmute(., vdate = as_date(x$vdate), date, varname, value)
 
-		fs::dir_delete(file.path(tempdir(), 'cbo'))
-
 		return(cleaned_res)
 	})
+
 
 	cbo_data =
 		cleaned %>%

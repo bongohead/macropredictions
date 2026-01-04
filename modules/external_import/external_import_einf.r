@@ -171,7 +171,8 @@ local({
 			vdate,
 			date,
 			value
-		)
+		) %>%
+		na.omit()
 
 	raw_data <<- einf_results
 })
