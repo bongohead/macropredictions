@@ -74,6 +74,12 @@ Please see the wiki pages on [server maintenance](https://wiki.macropredictions.
 
 ## Changelog
 
+## v3.1.2 - 2026.01
+- **External forecasts**
+	- Fixed broken scraping helpers
+- **Historical data**
+	- Migrated source of AMERIBOR data
+
 ## v3.1.1 - 2025.07
 - **External forecasts**
 	- Deprecated Bloomberg data sources due to BSBY index removal

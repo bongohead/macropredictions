@@ -88,36 +88,32 @@ local({
 	hist$treasury <<- treasury_data
 })
 
-## AFX  ----------------------------------------------------------
+## BC  ----------------------------------------------------------
 local({
-
-	message('***** Importing AFX Data')
-
-	afx_data =
-		request('https://us-central1-ameribor.cloudfunctions.net/api/rates') %>%
-		req_retry(max_tries = 5) %>%
-		req_perform %>%
-		resp_body_json %>%
-		keep(., \(x) all(c('date', 'value', 'derivedThirty', 'derivedNinety') %in% names(x))) %>%
-		map(., function(x)
-			as_tibble(x) %>%
-				select(., all_of(c('date', 'value', 'derivedThirty', 'derivedNinety'))) %>%
-				mutate(., across(-date, function(x) as.numeric(x)))
-		) %>%
-		list_rbind %>%
-		mutate(., date = ymd(date)) %>%
-		pivot_longer(., -date, names_to = 'varname_scrape', values_to = 'value') %>%
-		inner_join(
+	
+	message('***** Importing BC Data')
+	
+	bc_data =
+		filter(input_sources, hist_source == 'barchart') %>%
+		df_to_list %>%
+		map(., \(x) get_barchart_data(x$hist_source_key)) %>%
+		list_rbind() %>%
+		left_join(
 			.,
-			select(filter(input_sources, hist_source == 'afx'), varname, hist_source_key),
-			by = c('varname_scrape' = 'hist_source_key')
-			) %>%
-		distinct(.) %>%
-		transmute(., vdate = date + days(1), varname, freq = 'd', date, value)
+			select(input_sources, 'varname', 'hist_source_key'),
+			by = c('contract' = 'hist_source_key'),
+			relationship = 'many-to-one'
+		) %>%
+		transmute(.,
+			varname,
+			freq = 'd',
+			date = as_date(tradedate),
+			vdate = date + days(1),
+			value = as.numeric(close)
+		)
 
-	hist$afx <<- afx_data
+	hist$bc <<- bc_data
 })
-
 
 ## BOE  ----------------------------------------------------------
 local({

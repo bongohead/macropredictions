@@ -151,33 +151,26 @@ local({
 	hist$raw$yahoo <<- yahoo_data
 })
 
-## 4. AFX  ----------------------------------------------------------
+## 4. Barchart ----------------------------------------------------------
 local({
 
-	message(str_glue('*** Importing AFX Data | {format(now(), "%H:%M")}'))
+	message(str_glue('*** Importing Barchart Data | {format(now(), "%H:%M")}'))
 
-	afx_data =
-		request('https://us-central1-ameribor.cloudfunctions.net/api/rates') %>%
-		req_perform %>%
-		resp_body_json %>%
-		keep(., \(x) all(c('date', 'value', 'derivedThirty', 'derivedNinety') %in% names(x))) %>%
-		map(., function(x)
-			as_tibble(x) %>%
-				select(., all_of(c('date', 'value', 'derivedThirty', 'derivedNinety'))) %>%
-				mutate(., across(-date, function(x) as.numeric(x)))
-		) %>%
-		list_rbind %>%
-		mutate(., date = ymd(date)) %>%
-		pivot_longer(., -date, names_to = 'varname_scrape', values_to = 'value') %>%
-		inner_join(
-			.,
-			select(filter(variable_params, hist_source == 'afx'), varname, hist_source_key),
-			by = c('varname_scrape' = 'hist_source_key')
-		) %>%
-		distinct(.) %>%
-		transmute(., varname, freq = 'd', date, vdate = date, value)
+	barchart_data = list_rbind(map(df_to_list(filter(variable_params, hist_source == 'barchart')), function(x) {
 
-	hist$raw$afx <<- afx_data
+		get_barchart_data(x$hist_source_key) %>%
+			transmute(
+				.,
+				varname = x$varname,
+				freq = x$hist_source_freq,
+				date = as_date(tradedate),
+				vdate = date,
+				value = as.numeric(close)
+			) %>%
+			filter(date >= IMPORT_DATE_START)
+	}))
+
+	hist$raw$barchart <<- barchart_data
 })
 
 ## 5. ECB ---------------------------------------------------------------------
@@ -463,7 +456,7 @@ local({
 			filter(hist$raw$fred, !varname %in% unique(.$varname)),
 			filter(hist$raw$treas, !varname %in% unique(.$varname)),
 			filter(hist$raw$yahoo, !varname %in% unique(.$varname)),
-			filter(hist$raw$afx, !varname %in% unique(.$varname)),
+			filter(hist$raw$barchart, !varname %in% unique(.$varname)),
 			filter(hist$raw$ecb, !varname %in% unique(.$varname)),
 			filter(hist$raw$euribor, !varname %in% unique(.$varname)),
 			filter(hist$raw$boe, !varname %in% unique(.$varname))
