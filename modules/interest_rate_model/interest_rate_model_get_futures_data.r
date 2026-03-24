@@ -8,7 +8,7 @@
 #' https://www.cmegroup.com/confluence/display/EPICSANDBOX/Daily+Settlement+Time+Details
 
 # Initialize ----------------------------------------------------------
-BACKFILL_MONTHS = 3
+BACKFILL_MONTHS = 1
 
 validation_log <<- list()
 
@@ -200,15 +200,15 @@ local({
 		'euribor', '15275', '17455', '3m',
 		'estr', '15274', '17454', '1m',
 	)
-
+	
 	ice_raw_data = list_rbind(map(df_to_list(ice_codes), function(x) {
 
 		# Get top-level expiration IDs
 		expiration_ids = request(str_glue(
-			'https://www.theice.com/marketdata/DelayedMarkets.shtml?',
-			'getContractsAsJson=&productId={x$product_id}&hubId={x$hub_id}'
+			'https://www.ice.com/marketdata/api/productguide/charting/contract-data?',
+			'productId={x$product_id}&hubId={x$hub_id}'
 		)) %>%
-			req_retry(max_tries = 5) %>%
+			req_retry(max_tries = 10) %>%
 			req_perform %>%
 			resp_body_json %>%
 			# Filter out packs & bundles
@@ -218,14 +218,14 @@ local({
 				market_id = as.character(z$marketId)
 			)) %>%
 			list_rbind
-
+		
 		# Iterate through the expiration IDs
 		list_rbind(map(df_to_list(expiration_ids), function(z)
 			request(str_glue(
-				'https://www.theice.com/marketdata/DelayedMarkets.shtml?',
-				'getHistoricalChartDataAsJson=&marketId={z$market_id}&historicalSpan=2'
+				'https://www.ice.com/marketdata/api/productguide/charting/data/historical?',
+				'marketId={z$market_id}&historicalSpan=2'
 				)) %>%
-				req_retry(max_tries = 5) %>%
+				req_retry(max_tries = 10) %>%
 				req_perform %>%
 				resp_body_json %>%
 				.$bars %>%
