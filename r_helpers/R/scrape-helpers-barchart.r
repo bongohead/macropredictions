@@ -67,7 +67,7 @@ get_barchart_data = function(codes, .verbose = T) {
 
 	barchart_data = list_rbind(map(codes, .progress = .verbose, function(code) {
 
-		Sys.sleep(runif(1, 1, 4))
+		Sys.sleep(runif(1, 1, 3))
 
 		http_response =
 			request(paste0(
