@@ -119,8 +119,21 @@ local({
 				filter(., vdate == max(vdate)) %>%
 				ungroup(.) %>%
 				arrange(., date) %>%
-				tail(., 12) %>%
-				select(., date, value)
+				# tail(., 12) %>%
+				select(., date, value) %>%
+				# Due to data omission in Oct 2025, select by dates (l12 before this vdate-month)
+				left_join(
+					tibble(
+						date = seq(
+							from = floor_date(x$vdate[[1]] - years(1), 'month'),
+							to = floor_date(x$vdate[[1]] - months(1), 'month'),
+							by = '1 month'
+						)
+					),
+					.,
+					by = 'date'
+				) %>%
+				mutate(., value = zoo::na.locf(value))
 
 			# Calculate monthly growth rate
 			# (1+ yttm_ahead_annualized_yield(t))^12 = (1 + monthly_growth_rate(t)) *
