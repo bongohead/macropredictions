@@ -46,10 +46,10 @@ local({
 		'2025-01-19', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0125.xlsx',
 		'2025-04-12', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0425.xlsx',
 		'2025-07-13', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0725.xlsx',
-		'2025-10-15', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon1025.xlsx'
+		'2025-10-15', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon1025.xlsx',
+		'2026-01-18', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0126.xlsx',
+		'2026-03-19', 'https://prod-i.a.dj.com/public/resources/documents/wsjecon0326.xlsx'
 		)
-
-
 
 	orgs_to_retain <<- orgs_to_retain
 	wsj_search <<- wsj_search
@@ -92,7 +92,7 @@ local({
 ## Pull Recent Data ------------------------------------------------------------------
 local({
 
-	pulled_data = list_rbind(map(df_to_list(wsj_search), .progress = T, function(search_params) {
+	pulled_data = list_rbind(map(df_to_list(tail(wsj_search, 2)), .progress = T, function(search_params) {
 
 		filename = file_temp(ext = '.xlsx')
 
