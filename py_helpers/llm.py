@@ -35,9 +35,9 @@ async def send_async_requests(inputs: list[dict], request_generator: Callable, b
 
         # Example 2: POST request returning JSON
         async def req_gen(session, input):
-            url = 'https://api.openai.com/v1/chat/completions'
+            url = 'https://api.openai.com/v1/responses'
             headers = {'Authorization': 'Bearer ' + os.getenv('OPENAI_API_KEY')}
-            payload = {'model': 'gpt-4.1', 'messages': input['p']}
+            payload = {'model': 'gpt-5.2', 'input': input['p']}
             async with session.post(url, headers = headers, json = payload) as response:
                 return await response.json()
                 
@@ -120,7 +120,7 @@ async def send_async_requests(inputs: list[dict], request_generator: Callable, b
     return [flat[i] for i in range(len(inputs))]
 
 
-async def get_llm_responses_openai(prompts: list[list], params: dict = {'model': 'gpt-4o-mini'}, batch_size: int = 3, max_retries: int = 3, api_key: str = os.getenv('OPENAI_API_KEY'), verbose = None):   
+async def get_llm_responses_openai(prompts: list[list], params: dict = {'model': 'gpt-5'}, batch_size: int = 3, max_retries: int = 3, api_key: str = os.getenv('OPENAI_API_KEY'), verbose = None):   
     """
     Asynchronously send a list of LLM prompts to the OpenAI API endpoint directly
 
@@ -142,13 +142,14 @@ async def get_llm_responses_openai(prompts: list[list], params: dict = {'model':
         await get_llm_responses_openai(prompts_list, {'model': 'o4-mini'})
     """
 
-    url = 'https://api.openai.com/v1/chat/completions'
+    url = 'https://api.openai.com/v1/responses'
     headers = {'Authorization': 'Bearer ' + api_key}
     params = params or {}
 
     async def _request(session, prompt: list[dict]) -> object:
-        payload = {'messages': prompt, **params}
+        payload = {'input': prompt, **params}
         async with session.post(url, headers = headers, json = payload) as resp:
+            resp.raise_for_status()
             return await resp.json()
 
     return await send_async_requests(
