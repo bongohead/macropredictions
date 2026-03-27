@@ -9,6 +9,7 @@ library(macropredictions)
 library(tidyverse)
 library(httr2)
 library(rvest)
+library(pdftools)
 library(reticulate)
 
 use_virtualenv(file.path(Sys.getenv('MP_DIR'), '.venv'))
@@ -19,17 +20,12 @@ pg = connect_pg()
 
 # Import ------------------------------------------------------------------
 
-## Get Data ------------------------------------------------------------------
+## Get Data
 local({
 
-	message('***** Downloading Fannie Mae Data')
-
-	fnma_dir = file.path(tempdir(), 'fnma')
-	fs::dir_create(fnma_dir)
-
-	message('***** FNMA dir: ', fnma_dir)
-
-	fnma_links =
+	message('***** Getting FNMA Links')
+	
+	fnma_links_raw =
 		request('https://www.fanniemae.com/research-and-insights/forecast/forecast-monthly-archive') %>%
 		req_perform %>%
 		resp_body_html %>%
@@ -44,37 +40,99 @@ local({
 				TRUE ~ NA_character_
 			)
 		)) %>%
-		na.omit
+		na.omit %>%
+		mutate(., post2026 = ifelse(cumsum(ifelse(str_detect(url, 'december-2025'), 1, 0)) == 1, 0, 1))
 
-	fnma_details =
-		fnma_links %>%
+	# Get vdates for 2026
+	
+	# 2026+: Announcement posts for 2026 and later aren't available. We'll use file modification date instead.
+	post2026_by_month =
+		fnma_links_raw %>%
+		filter(., post2026 == 1) %>%
+		mutate(., fname_vdate = as_date(parse_date_time(str_sub(url, -6), 'mY'))) %>%
+		pivot_wider(., id_cols = c(fname_vdate), names_from = type, values_from = url)
+	
+	if(nrow(na.omit(post2026_by_month)) != nrow(post2026_by_month))	stop('Post-2026 data error')
+
+	get_mod_date = \(url) request(paste0('https://www.fanniemae.com', url)) %>%
+		req_perform %>%
+		resp_body_raw %>%
+		pdf_info %>%
+		.$modified %>%
+		as_date()
+
+	post2026_with_vdates = 
+		post2026_by_month %>%
+		mutate(
+			., 
+			econ_mod_vdate = map_vec(econ_forecast, get_mod_date),
+			housing_mod_vdate = map_vec(housing_forecast, get_mod_date)
+		) %>%
+		rowwise() %>%
+		mutate(., vdate = max(econ_mod_vdate, housing_mod_vdate)) %>%
+		ungroup()
+	
+	# Confirm filename vdate matches modified time vdate
+	if(any(floor_date(post2026_with_vdates$vdate, 'month') != floor_date(post2026_with_vdates$fname_vdate, 'month'))) {
+		stop('Post-2026 vdate mismatch')
+	}
+	
+	fnma_links_post2026 = select(post2026_with_vdates, vdate, econ_forecast, housing_forecast)
+	
+	
+	# 2025-: Use announcement posts. Pull last 12 only; change if needed.
+	fnma_links_pre2026 = 
+		fnma_links_raw %>%
+		filter(., post2026 == 0) %>%
 		mutate(., group = (1:nrow(.) - 1) %/% 3) %>%
 		pivot_wider(., id_cols = group, names_from = type, values_from = url) %>%
 		na.omit %>%
-		df_to_list %>%
 		head(12) %>%
-		imap(., .progress = T, function(x, i) {
-
-			# if (i %% 10 == 0) message('Downloading ', i)
-
+		mutate(., vdate = map_vec(article, \(x) {
+			
 			vdate =
-				request(paste0('https://www.fanniemae.com', x$article)) %>%
+				request(paste0('https://www.fanniemae.com', x)) %>%
 				req_perform %>%
 				resp_body_html %>%
 				html_node(., '.field-space-sm.font-weight-light') %>%
 				html_text %>%
 				mdy
+			
+			vdate
+		})) %>%
+		select(., -article, -group)
+
+	
+	fnma_links <<- bind_rows(fnma_links_post2026, fnma_links_pre2026)
+})
+
+## Get Data ------------------------------------------------------------------
+local({
+
+	message('***** Downloading Fannie Mae Data')
+
+	fnma_dir = file.path(tempdir(), 'fnma')
+	fs::dir_create(fnma_dir)
+
+	message('***** FNMA dir: ', fnma_dir)
+
+	fnma_details =
+		fnma_links %>%
+		df_to_list %>%
+		imap(., .progress = T, function(x, i) {
+
+			# if (i %% 10 == 0) message('Downloading ', i)
 
 			request(paste0('https://www.fanniemae.com', x$econ_forecast)) %>%
-				req_perform(., path = file.path(fnma_dir, paste0('econ_', vdate, '.pdf')))
+				req_perform(., path = file.path(fnma_dir, paste0('econ_', x$vdate, '.pdf')))
 
 			request(paste0('https://www.fanniemae.com', x$housing_forecast)) %>%
-				req_perform(., path = file.path(fnma_dir, paste0('housing_', vdate, '.pdf')))
+				req_perform(., path = file.path(fnma_dir, paste0('housing_', x$vdate, '.pdf')))
 
 			tibble(
-				vdate = vdate,
-				econ_forecast_path = normalizePath(file.path(fnma_dir, paste0('econ_', vdate, '.pdf'))),
-				housing_forecast_path = normalizePath(file.path(fnma_dir, paste0('housing_', vdate, '.pdf')))
+				vdate = x$vdate,
+				econ_forecast_path = normalizePath(file.path(fnma_dir, paste0('econ_', x$vdate, '.pdf'))),
+				housing_forecast_path = normalizePath(file.path(fnma_dir, paste0('housing_', x$vdate, '.pdf')))
 			)
 		}) %>%
 		list_rbind(.)
@@ -143,6 +201,8 @@ local({
 		}) %>%
 		list_rbind()
 
+	# fnma_clean_macro %>% count(vdate, varname) %>% pivot_wider(names_from = varname, values_from = n)
+	
 	fnma_clean_housing = imap(df_to_list(fnma_details), function(x, i) {
 
 		message(str_glue('Importing housing {i}'))
@@ -189,7 +249,9 @@ local({
 		return(clean_import)
 		}) %>%
 		list_rbind()
-
+	
+	fnma_clean_housing %>% count(vdate, varname) %>% pivot_wider(names_from = varname, values_from = n)
+	
 	fnma_data =
 		bind_rows(fnma_clean_macro, fnma_clean_housing) %>%
 		transmute(
