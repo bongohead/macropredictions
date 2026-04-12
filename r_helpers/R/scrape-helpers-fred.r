@@ -1,3 +1,43 @@
+#' Internal helper to pull FRED data
+#'
+#' @param url URL to pull from.
+#' @param .modify_req A modifier function to add additional req changes
+#'
+#' @return The JSON parsed results.
+#'
+#' @description Handles miscellaneous error codes; by default httr2 only treats 429/503 as errs, not 500/502.
+#'
+#' @import dplyr purrr httr2
+#'
+#' @examples \dontrun{
+#'   get_fred_json(url, .modify_req = \(req) req %>% req_timeout(8) %>% req_user_agent('macropredictions'))
+#' }
+#'
+#' @keywords internal
+get_fred_json = function(url, .modify_req = identity) {
+	stopifnot(
+		is.character(url) && length(url) == 1L && !is.na(url),
+		is.function(.modify_req)
+	)
+
+	req = request(url)
+	req = .modify_req(req)
+
+	req %>%
+		req_retry(
+			max_tries = 10,
+			retry_on_failure = TRUE,
+			is_transient = \(resp) resp_status(resp) %in% c(429, 500, 502, 503, 504),
+			backoff = \(i) 30
+		) %>%
+		req_error(body = \(resp) {
+			print(resp)
+			return(resp_body_string(resp))
+		}) %>%
+		req_perform() %>%
+		resp_body_json()
+}
+
 #' Returns last available observations from St. Louis Federal Reserve Economic Database (FRED)
 #'
 #' @param pull_ids A vector of FRED series IDs to pull from such as `c(id1, id2, ...)`;
@@ -47,14 +87,7 @@ get_fred_obs = function(pull_ids, api_key, .obs_start = '2000-01-01', .verbose =
 				'&api_key=',api_key,
 				'&file_type=json'
 			) %>%
-			request() %>%
-			req_retry(max_tries = 10, backoff = function(i) 30) %>%
-			req_error(., body = function(resp) {
-				print(resp)
-				return(resp_body_string(resp))
-			}) %>%
-			req_perform() %>%
-			resp_body_json() %>%
+			get_fred_json() %>%
 			.$seriess %>%
 			.[[1]]
 
@@ -63,7 +96,7 @@ get_fred_obs = function(pull_ids, api_key, .obs_start = '2000-01-01', .verbose =
 
 	# Get data from obs endpoint
 	obs_results = imap(reqs_map_filled, function(x, i) {
-		req =
+		url =
 			request(paste0(
 				'https://api.stlouisfed.org/fred/series/observations?',
 				'series_id=', x$series_id,
@@ -74,17 +107,8 @@ get_fred_obs = function(pull_ids, api_key, .obs_start = '2000-01-01', .verbose =
 				{if (x$freq != 'na') paste0('&frequency=', x$freq) else ''}, # Handle empty freqs e.g. FEDTARMDLR
 				'&aggregation_method=avg'
 			)) %>%
-			req_timeout(., 8000) %>%
-			req_retry(max_tries = 10, backoff = function(i) 30) %>%
-			req_error(., body = function(resp) {
-				print(resp)
-				return(resp_body_string(resp))
-			})
 
-		resp = req_perform(req)
-
-		resp %>%
-			resp_body_json() %>%
+		get_fred_json(url, \(req) req_timeout(8))
 			.$observations %>%
 			map(., as_tibble) %>%
 			list_rbind %>%
@@ -171,33 +195,18 @@ get_fred_obs_with_vintage = function(pull_ids, api_key, .obs_start = '2000-01-01
 
 		# Returns series metadata
 		series_res =
-			request(series_url) %>%
-			req_retry(max_tries = 10, backoff = function(i) 30) %>%
-			req_error(., body = function(resp) {
-				print(resp)
-				return(resp_body_string(resp))
-			}) %>%
-			req_perform() %>%
-			resp_body_json() %>%
+			get_fred_json(series_url) %>%
 			.$seriess %>%
 			.[[1]]
 
 		# Returns list of vintage dates
 		vintage_res =
-			request(vintages_url) %>%
-			req_retry(max_tries = 10, backoff = function(i) 30) %>%
-			req_error(., body = function(resp) {
-				print(resp)
-				return(resp_body_string(resp))
-			}) %>%
-			req_perform() %>%
-			resp_body_json() %>%
+			get_fred_json(vintages_url) %>%
 			.$vintage_dates %>%
 			unlist(.)
 
 		vintage_dates_split = split(vintage_res, ceiling(seq_along(vintage_res)/max_vdates_per_fetch))
 		vintage_date_groups = map(vintage_dates_split, function(x) list(start = head(x, 1), end = tail(x, 1)))
-
 
 		list(
 			series_id = x$series_id,
@@ -223,14 +232,7 @@ get_fred_obs_with_vintage = function(pull_ids, api_key, .obs_start = '2000-01-01
 
 			if (.verbose == T) message(obs_url)
 
-			request(obs_url) %>%
-				req_retry(max_tries = 10, backoff = function(i) 30) %>%
-				req_error(., body = function(resp) {
-					print(resp)
-					return(resp_body_string(resp))
-				}) %>%
-				req_perform() %>%
-				resp_body_json() %>%
+			get_fred_json(obs_url) %>%
 				.$observations %>%
 				map(., as_tibble) %>%
 				list_rbind %>%
