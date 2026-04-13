@@ -13,7 +13,7 @@
 #'   get_fred_json(url, .modify_req = \(req) req %>% req_timeout(8) %>% req_user_agent('macropredictions'))
 #' }
 #'
-#' @keywords internal
+#' @export
 get_fred_json = function(url, .modify_req = identity) {
 	stopifnot(
 		is.character(url) && length(url) == 1L && !is.na(url),
@@ -106,9 +106,9 @@ get_fred_obs = function(pull_ids, api_key, .obs_start = '2000-01-01', .verbose =
 				'&observation_start=', .obs_start, '&observation_end=', today,
 				{if (x$freq != 'na') paste0('&frequency=', x$freq) else ''}, # Handle empty freqs e.g. FEDTARMDLR
 				'&aggregation_method=avg'
-			)) %>%
+			))
 
-		get_fred_json(url, \(req) req_timeout(8))
+		get_fred_json(url, .modify_req = \(req) req_timeout(8))
 			.$observations %>%
 			map(., as_tibble) %>%
 			list_rbind %>%
