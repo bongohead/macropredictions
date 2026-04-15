@@ -96,19 +96,18 @@ get_fred_obs = function(pull_ids, api_key, .obs_start = '2000-01-01', .verbose =
 
 	# Get data from obs endpoint
 	obs_results = imap(reqs_map_filled, function(x, i) {
-		url =
-			request(paste0(
-				'https://api.stlouisfed.org/fred/series/observations?',
-				'series_id=', x$series_id,
-				'&api_key=', api_key,
-				'&file_type=json',
-				'&realtime_start=', today, '&realtime_end=', today,
-				'&observation_start=', .obs_start, '&observation_end=', today,
-				{if (x$freq != 'na') paste0('&frequency=', x$freq) else ''}, # Handle empty freqs e.g. FEDTARMDLR
-				'&aggregation_method=avg'
-			))
+		url = paste0(
+			'https://api.stlouisfed.org/fred/series/observations?',
+			'series_id=', x$series_id,
+			'&api_key=', api_key,
+			'&file_type=json',
+			'&realtime_start=', today, '&realtime_end=', today,
+			'&observation_start=', .obs_start, '&observation_end=', today,
+			{if (x$freq != 'na') paste0('&frequency=', x$freq) else ''}, # Handle empty freqs e.g. FEDTARMDLR
+			'&aggregation_method=avg'
+		)
 
-		get_fred_json(url, .modify_req = \(req) req_timeout(8))
+		get_fred_json(url) %>%
 			.$observations %>%
 			map(., as_tibble) %>%
 			list_rbind %>%

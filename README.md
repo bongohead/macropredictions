@@ -74,6 +74,19 @@ Please see the wiki pages on [server maintenance](https://wiki.macropredictions.
 
 ## Changelog
 
+## v3.1.4 - 2026.04
+- **R helpers**
+	- Added better retry handling for 500/502s to handle common FRED API failures
+
+## v3.1.3 - 2026.03
+- **External forecasts**
+	- Fixed bug in futures data aggregation
+	- Fixed expected inf forecast related to Oct vintage data gap
+- **Python helpers**
+	- LLM response recipe migration
+- **R helpers**
+	- Added external LLM API call for parsing
+
 ## v3.1.2 - 2026.01
 - **External forecasts**
 	- Fixed broken scraping helpers
@@ -108,16 +121,16 @@ Please see the wiki pages on [server maintenance](https://wiki.macropredictions.
 - Migrated from previous `econforecasting-r` git repo
 - Improved the README to be usable
 - **R helpers**
-    - Migrated R package from `r_package` to `r_helpers`
-    - Cleaned out unused/deprecated functions
-    - Consolidated code for FRED API calls
-    - Added async requests function for high-volume calls
+	- Migrated R package from `r_package` to `r_helpers`
+	- Cleaned out unused/deprecated functions
+	- Consolidated code for FRED API calls
+	- Added async requests function for high-volume calls
 - **Python controller**
-    - Added Python script controller and top-level `py_helpers` module
-    - Added db helpers for Python
+	- Added Python script controller and top-level `py_helpers` module
+	- Added db helpers for Python
 - **Text indices**
-    - Cleaned up text data scrape code
-    - Added code for calling LLM labelers for generating BERT training labels
-    - Added BERT finetuning code with PEFT
-    - Added BERT inference code
-    - Added index construction & backtesting
+	- Cleaned up text data scrape code
+	- Added code for calling LLM labelers for generating BERT training labels
+	- Added BERT finetuning code with PEFT
+	- Added BERT inference code
+	- Added index construction & backtesting
